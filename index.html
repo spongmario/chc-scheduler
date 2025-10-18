@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CHC Scheduler - Urgent Care Shift Planning</title>
+    <link rel="stylesheet" href="styles.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>CHC Scheduler</h1>
+            <p>Urgent Care Shift Planning Tool</p>
+        </header>
+
+        <main>
+            <div class="upload-section">
+                <h2>Upload Provider Preferences</h2>
+                <div class="form-group">
+                    <label for="month-select">Select Month to Schedule:</label>
+                    <input type="month" id="month-select" required>
+                </div>
+                
+                <div class="form-group">
+                    <label for="excel-file">Upload Excel File:</label>
+                    <input type="file" id="excel-file" accept=".xlsx,.xls" required>
+                    <small>Excel file should have columns: Name, Days per Week, Saturdays per Month, Preferred Weekday Off, Shift Preference, PTO Dates</small>
+                </div>
+                
+                <button id="generate-schedule" class="btn-primary">Generate Schedule</button>
+            </div>
+
+            <div id="loading" class="loading hidden">
+                <div class="spinner"></div>
+                <p>Generating optimal schedule...</p>
+            </div>
+
+            <div id="schedule-results" class="schedule-results hidden">
+                <h2>Generated Schedule</h2>
+                <div id="calendar-container"></div>
+                <div class="schedule-actions">
+                    <button id="export-schedule" class="btn-secondary">Export to Excel</button>
+                    <button id="regenerate-schedule" class="btn-secondary">Regenerate</button>
+                </div>
+            </div>
+
+            <div id="error-message" class="error-message hidden">
+                <h3>Error</h3>
+                <p id="error-text"></p>
+            </div>
+        </main>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
