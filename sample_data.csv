@@ -1,0 +1,9 @@
+Name,Days per Week,Saturdays per Month,Preferred Weekday Off,Shift Preference,PTO Date
+John Smith,4,2,Monday,Friday,open,mid,12/25/2024,01/01/2025
+Sarah Johnson,5,1,Monday,Tuesday,mid,open,12/24/2024
+Mike Davis,3,3,Wednesday,Thursday,close,mid,open,
+Lisa Wilson,4,2,Tuesday,Wednesday,open,close,12/31/2024
+Dr. Robert Chen,5,2,Thursday,Friday,mid,open,close,
+Nurse Amy Brown,4,1,Sunday,Monday,close,mid,12/23/2024,12/30/2024
+Dr. Maria Garcia,3,2,Saturday,Sunday,open,close,mid,
+Nurse Tom Wilson,4,3,Friday,Saturday,mid,open,01/15/2025

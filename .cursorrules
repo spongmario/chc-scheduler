@@ -1,0 +1,68 @@
+# CHC Scheduler - Cursor Rules
+
+## Project Overview
+This is a web-based urgent care scheduling system that generates optimal shift schedules based on provider preferences and constraints.
+
+## Documentation First
+Before making any changes or answering questions about this project, ALWAYS read the comprehensive documentation in the `llm-docs/` folder:
+
+1. **Start with**: `llm-docs/README.md` - Overview of all documentation
+2. **System understanding**: `llm-docs/system-overview.md` - Architecture and components
+3. **Algorithm details**: `llm-docs/algorithm-details.md` - Core scheduling logic
+4. **Data format**: `llm-docs/data-format.md` - Input/output specifications
+5. **API reference**: `llm-docs/api-reference.md` - Complete method documentation
+6. **Development guide**: `llm-docs/development-guide.md` - Practical implementation
+
+## Key Project Files
+- `index.html` - Main application interface
+- `script.js` - Core scheduling algorithm and logic
+- `styles.css` - UI styling and layout
+- `sample_data.csv` - Example input data
+- `llm-docs/` - Comprehensive technical documentation
+
+## Important Context
+- This is a **static website** that runs entirely in the browser
+- Uses **SheetJS** for Excel file processing
+- Implements a **sophisticated scheduling algorithm** with preference-based scoring
+- Handles **multiple preferences in priority order** with flexible fallbacks
+- Supports **PTO dates, preferred days off, and shift preferences**
+
+## Development Guidelines
+- Always reference the documentation before making changes
+- Test changes with the provided `sample_data.csv`
+- Maintain the existing code structure and patterns
+- Follow the error handling patterns established in the codebase
+- Ensure browser compatibility (Chrome, Firefox, Safari, Edge)
+
+## Common Tasks
+- **Algorithm modifications**: See `algorithm-details.md` for scoring system
+- **Data format changes**: See `data-format.md` for input specifications
+- **UI updates**: See `development-guide.md` for styling patterns
+- **New features**: Follow the patterns in `api-reference.md`
+
+## Error Handling
+- Always provide clear error messages to users
+- Use the established error handling patterns in `script.js`
+- Test error conditions with invalid data
+- Reference `development-guide.md` for debugging techniques
+
+## Performance Considerations
+- Algorithm complexity is O(d × s × p × log p) where d=days, s=shifts, p=providers
+- Keep provider count under 30 for optimal performance
+- Use the optimization strategies in `algorithm-details.md`
+
+## Testing
+- Use `sample_data.csv` for testing
+- Test with different month selections
+- Verify export functionality
+- Check error conditions (invalid files, missing data)
+
+## Documentation Maintenance
+- Update documentation when making significant changes
+- Follow the standards in `llm-docs/README.md`
+- Keep code examples current and accurate
+- Cross-reference related documentation sections
+
+---
+
+**Remember**: This project has extensive documentation that should be consulted before making any changes. The `llm-docs/` folder contains everything needed to understand the system architecture, algorithm implementation, and development patterns.
