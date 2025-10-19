@@ -964,6 +964,100 @@ main {
     font-size: 1.1rem;
 }
 
+/* Shift editing styles */
+.shift-cell {
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+    position: relative;
+}
+
+.shift-cell:hover {
+    background-color: #f8f9fa;
+}
+
+.shift-cell.editing {
+    background-color: #e3f2fd;
+    border: 2px solid #2196f3;
+}
+
+.shift-edit-container {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: white;
+    border: 2px solid #2196f3;
+    border-radius: 4px;
+    padding: 8px;
+    z-index: 1000;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+}
+
+.shift-edit-dropdown {
+    width: 100%;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    padding: 4px;
+    font-size: 0.9rem;
+    margin-bottom: 8px;
+    background: white;
+}
+
+.shift-edit-dropdown:focus {
+    outline: none;
+    border-color: #2196f3;
+    box-shadow: 0 0 0 2px rgba(33, 150, 243, 0.2);
+}
+
+.shift-edit-buttons {
+    display: flex;
+    gap: 4px;
+    justify-content: center;
+}
+
+.btn-save-shift,
+.btn-cancel-shift {
+    padding: 4px 8px;
+    border: none;
+    border-radius: 3px;
+    font-size: 0.8rem;
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+}
+
+.btn-save-shift {
+    background-color: #4caf50;
+    color: white;
+}
+
+.btn-save-shift:hover {
+    background-color: #45a049;
+}
+
+.btn-cancel-shift {
+    background-color: #f44336;
+    color: white;
+}
+
+.btn-cancel-shift:hover {
+    background-color: #da190b;
+}
+
+/* Enhanced shift styling for editable cells */
+.shift-cell .shift {
+    transition: all 0.2s ease;
+}
+
+.shift-cell:hover .shift {
+    transform: scale(1.02);
+}
+
+/* Visual feedback for editing mode */
+.shift-cell.editing .shift {
+    opacity: 0.3;
+}
+
 /* Responsive interactive features */
 @media (max-width: 768px) {
     .filter-buttons {
@@ -982,5 +1076,19 @@ main {
     
     .issue-item:hover {
         transform: translateX(2px);
+    }
+    
+    .shift-edit-container {
+        padding: 6px;
+    }
+    
+    .shift-edit-dropdown {
+        font-size: 0.8rem;
+    }
+    
+    .btn-save-shift,
+    .btn-cancel-shift {
+        padding: 3px 6px;
+        font-size: 0.7rem;
     }
 }

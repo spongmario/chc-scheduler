@@ -1435,14 +1435,14 @@ class CHCScheduler {
                         // Thursday: only show mid shift, hide open and close
                         html += '<td class="thursday-off">-</td>'; // Open column
                         const midProviders = dayData.shifts.mid || [];
-                        html += `<td class="thursday-mid">`;
+                        html += `<td class="shift-cell thursday-mid" data-day="${dayNum}" data-shift="mid" data-location="${location}">`;
                         if (midProviders.length > 0) {
                             midProviders.forEach((provider, index) => {
                                 const isPTO = this.providers.find(p => p.name === provider)?.ptoDates.some(ptoDate => 
                                     ptoDate.getDate() === dayNum && ptoDate.getMonth() === month && ptoDate.getFullYear() === year
                                 );
                                 if (index > 0) html += '<br>'; // Add line break for multiple providers
-                                html += `<span class="shift mid ${isPTO ? 'pto' : ''}">${provider}</span>`;
+                                html += `<span class="shift mid ${isPTO ? 'pto' : ''}" data-provider="${provider}">${provider}</span>`;
                             });
                         } else {
                             html += '<span class="shift off">OFF</span>';
@@ -1453,13 +1453,13 @@ class CHCScheduler {
                         // Saturday: only show mid shift, hide open and close
                         html += '<td class="saturday-off">-</td>'; // Open column
                         const midProviders = dayData.shifts.mid || [];
-                        html += `<td>`;
+                        html += `<td class="shift-cell" data-day="${dayNum}" data-shift="mid" data-location="${location}">`;
                         if (midProviders.length > 0) {
                             midProviders.forEach(provider => {
                                 const isPTO = this.providers.find(p => p.name === provider)?.ptoDates.some(ptoDate => 
                                     ptoDate.getDate() === dayNum && ptoDate.getMonth() === month && ptoDate.getFullYear() === year
                                 );
-                                html += `<span class="shift mid ${isPTO ? 'pto' : ''}">${provider}</span>`;
+                                html += `<span class="shift mid ${isPTO ? 'pto' : ''}" data-provider="${provider}">${provider}</span>`;
                             });
                         } else {
                             html += '<span class="shift off">OFF</span>';
@@ -1470,13 +1470,13 @@ class CHCScheduler {
                         // Other weekdays: show all shifts
                         ['open', 'mid', 'close'].forEach(shiftType => {
                             const providers = dayData.shifts[shiftType] || [];
-                            html += `<td>`;
+                            html += `<td class="shift-cell" data-day="${dayNum}" data-shift="${shiftType}" data-location="${location}">`;
                             if (providers.length > 0) {
                                 providers.forEach(provider => {
                                     const isPTO = this.providers.find(p => p.name === provider)?.ptoDates.some(ptoDate => 
                                         ptoDate.getDate() === dayNum && ptoDate.getMonth() === month && ptoDate.getFullYear() === year
                                     );
-                                    html += `<span class="shift ${shiftType} ${isPTO ? 'pto' : ''}">${provider}</span>`;
+                                    html += `<span class="shift ${shiftType} ${isPTO ? 'pto' : ''}" data-provider="${provider}">${provider}</span>`;
                                 });
                             } else {
                                 html += '<span class="shift off">OFF</span>';
@@ -1560,6 +1560,9 @@ class CHCScheduler {
 
         // Add issue filtering buttons
         this.addIssueFilteringButtons();
+        
+        // Add shift editing functionality
+        this.addShiftEditingHandlers();
     }
 
     highlightRelatedEntries(issueText) {
@@ -2248,6 +2251,235 @@ class CHCScheduler {
             'saturday': '📅'
         };
         return icons[issueType] || '⚠️';
+    }
+
+    addShiftEditingHandlers() {
+        // Add click handlers to all shift cells
+        document.querySelectorAll('.shift-cell').forEach(cell => {
+            cell.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.startShiftEdit(cell);
+            });
+        });
+    }
+
+    startShiftEdit(cell) {
+        // Don't edit if already in edit mode
+        if (cell.querySelector('.shift-edit-dropdown')) return;
+
+        const day = parseInt(cell.dataset.day);
+        const shiftType = cell.dataset.shift;
+        const location = cell.dataset.location;
+        
+        // Get current providers for this shift
+        const currentProviders = this.schedule[location][day].shifts[shiftType] || [];
+        
+        // Create dropdown for provider selection
+        const dropdown = document.createElement('select');
+        dropdown.className = 'shift-edit-dropdown';
+        dropdown.multiple = true;
+        dropdown.size = Math.min(5, this.providers.length + 1);
+        
+        // Add "OFF" option
+        const offOption = document.createElement('option');
+        offOption.value = '';
+        offOption.textContent = 'OFF';
+        offOption.selected = currentProviders.length === 0;
+        dropdown.appendChild(offOption);
+        
+        // Add provider options
+        const availableProviders = this.getAvailableProviders(day, shiftType, location);
+        availableProviders.forEach(provider => {
+            const option = document.createElement('option');
+            option.value = provider.name;
+            option.textContent = provider.name;
+            option.selected = currentProviders.includes(provider.name);
+            dropdown.appendChild(option);
+        });
+        
+        // Create button container
+        const buttonContainer = document.createElement('div');
+        buttonContainer.className = 'shift-edit-buttons';
+        
+        const saveBtn = document.createElement('button');
+        saveBtn.textContent = 'Save';
+        saveBtn.className = 'btn-save-shift';
+        saveBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.saveShiftEdit(cell, dropdown);
+        });
+        
+        const cancelBtn = document.createElement('button');
+        cancelBtn.textContent = 'Cancel';
+        cancelBtn.className = 'btn-cancel-shift';
+        cancelBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.cancelShiftEdit(cell);
+        });
+        
+        buttonContainer.appendChild(saveBtn);
+        buttonContainer.appendChild(cancelBtn);
+        
+        // Hide current content and show edit interface
+        cell.style.position = 'relative';
+        cell.querySelectorAll('.shift').forEach(shift => shift.style.display = 'none');
+        
+        const editContainer = document.createElement('div');
+        editContainer.className = 'shift-edit-container';
+        editContainer.appendChild(dropdown);
+        editContainer.appendChild(buttonContainer);
+        
+        cell.appendChild(editContainer);
+    }
+
+    getAvailableProviders(day, shiftType, location) {
+        const year = parseInt(this.selectedMonth.split('-')[0]);
+        const month = parseInt(this.selectedMonth.split('-')[1]) - 1;
+        const date = new Date(year, month, day);
+        
+        // Get providers for this location (including float providers)
+        const locationProviders = this.providers.filter(p => p.location === location);
+        const floatProviders = this.providers.filter(p => p.location === 'Float');
+        const allProviders = [...locationProviders, ...floatProviders];
+        
+        // Filter out providers who are on PTO or already assigned to another shift that day
+        return allProviders.filter(provider => {
+            // Check if provider is on PTO
+            const isOnPTO = provider.ptoDates.some(ptoDate => {
+                const ptoDateNormalized = new Date(ptoDate.getFullYear(), ptoDate.getMonth(), ptoDate.getDate());
+                const scheduleDateNormalized = new Date(year, month, day);
+                return ptoDateNormalized.getTime() === scheduleDateNormalized.getTime();
+            });
+            
+            if (isOnPTO) return false;
+            
+            // Check if provider is already assigned to another shift that day
+            const dayData = this.schedule[location][day];
+            const alreadyAssigned = Object.values(dayData.shifts).some(shifts => 
+                Array.isArray(shifts) && shifts.includes(provider.name)
+            );
+            
+            return !alreadyAssigned;
+        });
+    }
+
+    saveShiftEdit(cell, dropdown) {
+        const day = parseInt(cell.dataset.day);
+        const shiftType = cell.dataset.shift;
+        const location = cell.dataset.location;
+        
+        // Get selected providers
+        const selectedProviders = Array.from(dropdown.selectedOptions)
+            .map(option => option.value)
+            .filter(value => value !== ''); // Remove empty "OFF" selection
+        
+        // Validate the selection
+        if (!this.validateShiftChange(day, shiftType, location, selectedProviders)) {
+            return;
+        }
+        
+        // Update the schedule data
+        this.schedule[location][day].shifts[shiftType] = selectedProviders;
+        
+        // Update the display
+        this.updateShiftCellDisplay(cell, selectedProviders, shiftType, day);
+        
+        // Remove edit interface
+        cell.querySelector('.shift-edit-container').remove();
+        
+        // Show updated shifts
+        cell.querySelectorAll('.shift').forEach(shift => shift.style.display = '');
+        
+        // Update dashboard
+        this.updateDashboard();
+    }
+
+    validateShiftChange(day, shiftType, location, selectedProviders) {
+        const year = parseInt(this.selectedMonth.split('-')[0]);
+        const month = parseInt(this.selectedMonth.split('-')[1]) - 1;
+        
+        // Check for PTO conflicts
+        for (const providerName of selectedProviders) {
+            const provider = this.providers.find(p => p.name === providerName);
+            if (provider) {
+                const isOnPTO = provider.ptoDates.some(ptoDate => {
+                    const ptoDateNormalized = new Date(ptoDate.getFullYear(), ptoDate.getMonth(), ptoDate.getDate());
+                    const scheduleDateNormalized = new Date(year, month, day);
+                    return ptoDateNormalized.getTime() === scheduleDateNormalized.getTime();
+                });
+                
+                if (isOnPTO) {
+                    alert(`Cannot assign ${providerName} to ${shiftType} shift on day ${day} - they are on PTO.`);
+                    return false;
+                }
+            }
+        }
+        
+        // Check for double-booking (provider assigned to multiple shifts same day)
+        const dayData = this.schedule[location][day];
+        for (const providerName of selectedProviders) {
+            for (const [otherShiftType, otherProviders] of Object.entries(dayData.shifts)) {
+                if (otherShiftType !== shiftType && Array.isArray(otherProviders) && otherProviders.includes(providerName)) {
+                    alert(`Cannot assign ${providerName} to ${shiftType} shift - they are already assigned to ${otherShiftType} shift.`);
+                    return false;
+                }
+            }
+        }
+        
+        return true;
+    }
+
+    updateShiftCellDisplay(cell, selectedProviders, shiftType, day) {
+        const year = parseInt(this.selectedMonth.split('-')[0]);
+        const month = parseInt(this.selectedMonth.split('-')[1]) - 1;
+        
+        // Clear existing shift spans
+        cell.querySelectorAll('.shift').forEach(shift => shift.remove());
+        
+        if (selectedProviders.length > 0) {
+            selectedProviders.forEach((provider, index) => {
+                const isPTO = this.providers.find(p => p.name === provider)?.ptoDates.some(ptoDate => 
+                    ptoDate.getDate() === day && ptoDate.getMonth() === month && ptoDate.getFullYear() === year
+                );
+                
+                const shiftSpan = document.createElement('span');
+                shiftSpan.className = `shift ${shiftType} ${isPTO ? 'pto' : ''}`;
+                shiftSpan.setAttribute('data-provider', provider);
+                shiftSpan.textContent = provider;
+                
+                if (index > 0) {
+                    shiftSpan.style.display = 'block';
+                    shiftSpan.style.marginTop = '2px';
+                }
+                
+                cell.appendChild(shiftSpan);
+            });
+        } else {
+            const offSpan = document.createElement('span');
+            offSpan.className = 'shift off';
+            offSpan.textContent = 'OFF';
+            cell.appendChild(offSpan);
+        }
+    }
+
+    cancelShiftEdit(cell) {
+        // Remove edit interface
+        cell.querySelector('.shift-edit-container').remove();
+        
+        // Show original shifts
+        cell.querySelectorAll('.shift').forEach(shift => shift.style.display = '');
+    }
+
+    updateDashboard() {
+        // Re-generate and update the issue analysis dashboard
+        const dashboard = document.querySelector('.issue-dashboard');
+        if (dashboard) {
+            const newDashboard = this.generateIssueAnalysisDashboard();
+            dashboard.outerHTML = newDashboard;
+            
+            // Re-add interactive features to the new dashboard
+            this.addInteractiveFeatures();
+        }
     }
 }
 
