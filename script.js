@@ -416,37 +416,52 @@ class CHCScheduler {
     }
 
     distributeShiftsWithRanking(schedule, workingProviders) {
-        // Distribute shifts with day ranking consideration for 3-provider priority
-        // Days are ranked: Monday, Tuesday, Friday, Wednesday, Thursday (in order of preference for 3 providers)
+        // NEW LOGIC: Prioritize Saturday assignments for providers who WANT to work Saturdays (2+)
+        // This ensures they get their preferred Saturday shifts before being assigned weekdays
         
-        // First, get all non-holiday days and sort by ranking
-        const daysToSchedule = [];
+        // First, get all non-holiday days and separate Saturdays from weekdays
+        const saturdaysToSchedule = [];
+        const weekdaysToSchedule = [];
+        
         for (const day in schedule) {
             const dayData = schedule[day];
             if (!dayData.isHoliday) {
-                daysToSchedule.push({
-                    day: parseInt(day),
-                    dayData: dayData,
-                    ranking: this.dayRanking[dayData.dayOfWeek] || 999
-                });
+                if (dayData.dayOfWeek === 6) {
+                    // Saturday
+                    saturdaysToSchedule.push({
+                        day: parseInt(day),
+                        dayData: dayData
+                    });
+                } else {
+                    // Weekday
+                    weekdaysToSchedule.push({
+                        day: parseInt(day),
+                        dayData: dayData,
+                        ranking: this.dayRanking[dayData.dayOfWeek] || 999
+                    });
+                }
             }
         }
         
-        // Sort by ranking (lower number = higher priority for 3 providers)
-        daysToSchedule.sort((a, b) => a.ranking - b.ranking);
+        // Sort weekdays by ranking (lower number = higher priority for 3 providers)
+        weekdaysToSchedule.sort((a, b) => a.ranking - b.ranking);
         
-        // Distribute shifts for each day in ranking order
-        for (const { day, dayData } of daysToSchedule) {
-            const isSaturday = dayData.dayOfWeek === 6;
+        // STEP 1: Assign ALL Saturday shifts FIRST
+        // This ensures providers who want Saturdays get them before being assigned weekdays
+        console.log('Assigning Saturday shifts first...');
+        for (const { day, dayData } of saturdaysToSchedule) {
+            this.assignSaturdayShift(workingProviders, dayData, day);
+        }
+        
+        // STEP 2: Assign weekday shifts
+        // Now assign weekdays, with providers who got their Saturday preferences having less weekday availability
+        console.log('Assigning weekday shifts...');
+        for (const { day, dayData } of weekdaysToSchedule) {
             const isThursday = dayData.dayOfWeek === 4;
 
             // Thursday: only mid shift, target 2 providers, allow 3 if needed, allow 1 if no other options
             if (isThursday) {
                 this.assignThursdayShifts(workingProviders, dayData, day);
-            }
-            // Saturday: only 1 provider assigned to "mid" shift
-            else if (isSaturday) {
-                this.assignSaturdayShift(workingProviders, dayData, day);
             } else {
                 // Other weekdays: prioritize open and close shifts before mid shift
                 this.assignWeekdayShifts(workingProviders, dayData, day);
@@ -502,13 +517,73 @@ class CHCScheduler {
 
     assignSaturdayShift(workingProviders, dayData, day) {
         // Saturday: only 1 provider assigned to "mid" shift
-        // Use emergency fallback if no providers meet normal criteria
+        // PRIORITY: Providers who WANT Saturdays (2+) get first priority
+        // CRITICAL: Saturday coverage is mandatory - must find someone
         
-        let provider = this.selectProviderForShift(workingProviders, dayData, 'mid', true);
+        // First, try to find providers who WANT Saturdays and haven't reached their limit
+        const saturdayWanters = workingProviders.filter(p => {
+            const assignedToday = p.currentShifts.some(s => s.day === dayData.date.getDate());
+            const isOnPTO = p.ptoDates.some(ptoDate => {
+                const ptoDateNormalized = new Date(ptoDate.getFullYear(), ptoDate.getMonth(), ptoDate.getDate());
+                const scheduleDateNormalized = new Date(dayData.date.getFullYear(), dayData.date.getMonth(), dayData.date.getDate());
+                return ptoDateNormalized.getTime() === scheduleDateNormalized.getTime();
+            });
+            const isPreferredDayOff = p.preferredDaysOff.includes(dayData.dayOfWeek);
+            const daysWorkedThisWeek = this.getDaysWorkedThisWeek(p, dayData.date);
+            const saturdayLimitExceeded = p.assignedSaturdays >= p.saturdaysPerMonth;
+            
+            return !assignedToday && !isOnPTO && !isPreferredDayOff && 
+                   daysWorkedThisWeek < p.daysPerWeek && !saturdayLimitExceeded &&
+                   p.saturdaysPerMonth >= 2; // Only providers who WANT Saturdays
+        });
+        
+        let provider = null;
+        
+        if (saturdayWanters.length > 0) {
+            // Score and select from providers who WANT Saturdays
+            const scoredProviders = saturdayWanters.map(p => {
+                let score = 0;
+                const saturdaysNeeded = p.saturdaysPerMonth - p.assignedSaturdays;
+                score += saturdaysNeeded * 200; // Very high priority for Saturday wanters
+                
+                // Prefer shift preference match
+                const shiftPreferenceIndex = p.shiftPreferences.indexOf('mid');
+                if (shiftPreferenceIndex !== -1) {
+                    score += (p.shiftPreferences.length - shiftPreferenceIndex) * 20;
+                }
+                
+                return { provider: p, score };
+            });
+            
+            scoredProviders.sort((a, b) => b.score - a.score);
+            provider = scoredProviders[0].provider;
+        }
+        
+        // If no Saturday wanters available, try normal selection
+        if (!provider) {
+            provider = this.selectProviderForShift(workingProviders, dayData, 'mid', true);
+        }
         
         // If no provider found with normal criteria, use emergency fallback
         if (!provider) {
             provider = this.selectProviderForEmergencyFallback(workingProviders, dayData, 'mid', true);
+        }
+        
+        // If still no provider, use the most desperate fallback - any available provider
+        if (!provider) {
+            const anyAvailableProvider = workingProviders.find(p => {
+                const assignedToday = p.currentShifts.some(s => s.day === dayData.date.getDate());
+                const isOnPTO = p.ptoDates.some(ptoDate => {
+                    const ptoDateNormalized = new Date(ptoDate.getFullYear(), ptoDate.getMonth(), ptoDate.getDate());
+                    const scheduleDateNormalized = new Date(dayData.date.getFullYear(), dayData.date.getMonth(), dayData.date.getDate());
+                    return ptoDateNormalized.getTime() === scheduleDateNormalized.getTime();
+                });
+                return !assignedToday && !isOnPTO;
+            });
+            
+            if (anyAvailableProvider) {
+                provider = anyAvailableProvider;
+            }
         }
         
         if (provider) {
@@ -516,15 +591,34 @@ class CHCScheduler {
             provider.assignedDays++;
             provider.assignedSaturdays++;
             provider.currentShifts.push({ day: day, shiftType: 'mid' });
+            console.log(`Saturday ${day}: Assigned to ${provider.name} (wants ${provider.saturdaysPerMonth} Saturdays, has ${provider.assignedSaturdays})`);
+        } else {
+            console.warn(`CRITICAL: No provider available for Saturday ${day} - this should not happen!`);
         }
     }
 
     assignWeekdayShifts(workingProviders, dayData, day) {
-        // Weekday constraints: prioritize open and close shifts before mid shift
-        // Maximum 3 providers per day, with day ranking for 3-provider priority
+        // Weekday constraints: be more conservative to leave room for Saturday coverage
+        // Target 2-3 providers per day, but prioritize Saturday availability
         // Use emergency fallback if no providers meet normal criteria
         
-        const maxProviders = 3;
+        // Calculate how many providers we should assign based on available capacity
+        const availableProviders = workingProviders.filter(p => {
+            const assignedToday = p.currentShifts.some(s => s.day === dayData.date.getDate());
+            const daysWorkedThisWeek = this.getDaysWorkedThisWeek(p, dayData.date);
+            const isOnPTO = p.ptoDates.some(ptoDate => {
+                const ptoDateNormalized = new Date(ptoDate.getFullYear(), ptoDate.getMonth(), ptoDate.getDate());
+                const scheduleDateNormalized = new Date(dayData.date.getFullYear(), dayData.date.getMonth(), dayData.date.getDate());
+                return ptoDateNormalized.getTime() === scheduleDateNormalized.getTime();
+            });
+            const isPreferredDayOff = p.preferredDaysOff.includes(dayData.dayOfWeek);
+            
+            return !assignedToday && !isOnPTO && !isPreferredDayOff && daysWorkedThisWeek < p.daysPerWeek;
+        });
+        
+        // Be more conservative - only assign 2 providers if we have limited availability
+        // This leaves more room for Saturday coverage
+        const maxProviders = availableProviders.length >= 4 ? 3 : 2;
         let assignedProviders = 0;
         
         // First, assign open shift (highest priority)
