@@ -3,7 +3,7 @@
 ## Excel File Format
 
 ### Required Columns (In Order)
-The Excel file must contain exactly 6 columns in the specified order:
+The Excel file must contain exactly 7 columns in the specified order:
 
 | Column | Name | Type | Description | Example |
 |--------|------|------|-------------|---------|
@@ -13,6 +13,7 @@ The Excel file must contain exactly 6 columns in the specified order:
 | 4 | Preferred Weekday Off | String | Comma-separated preferred days off | "Monday, Friday" |
 | 5 | Shift Preference | String | Comma-separated shift preferences | "open, mid, close" |
 | 6 | PTO Date | String | Comma-separated PTO dates | "12/25/2024, 01/01/2025" |
+| 7 | Location | String | Urgent care location to schedule | "Central" or "Edmonds" |
 
 ### Column Details
 
@@ -62,23 +63,31 @@ The Excel file must contain exactly 6 columns in the specified order:
 - **Validation**: Must be valid dates
 - **Example**: "12/25/2024, 01/01/2025"
 
+#### Column 7: Location
+- **Type**: String
+- **Required**: Yes
+- **Format**: Location name
+- **Valid Values**: "Central", "Edmonds"
+- **Validation**: Must be one of the supported locations
+- **Example**: "Central" (for Central urgent care location)
+
 ## Sample Data Format
 
 ### Complete Example
 ```csv
-Name,Days per Week,Saturdays per Month,Preferred Weekday Off,Shift Preference,PTO Date
-Dr. Sarah Johnson,5,2,Monday,Friday,open,mid,12/24/2024,12/31/2024
-Nurse Mike Davis,4,1,Wednesday,Thursday,close,mid,open,
-Dr. Lisa Wilson,3,3,Tuesday,Wednesday,open,close,mid,01/15/2025
-Nurse Tom Brown,4,2,Sunday,Monday,mid,open,close,
-Dr. Maria Garcia,5,1,Thursday,Friday,close,open,mid,12/25/2024
+Name,Days per Week,Saturdays per Month,Preferred Weekday Off,Shift Preference,PTO Date,Location
+Dr. Sarah Johnson,5,2,Monday,Friday,open,mid,12/24/2024,12/31/2024,Central
+Nurse Mike Davis,4,1,Wednesday,Thursday,close,mid,open,,Central
+Dr. Lisa Wilson,3,3,Tuesday,Wednesday,open,close,mid,01/15/2025,Edmonds
+Nurse Tom Brown,4,2,Sunday,Monday,mid,open,close,,Edmonds
+Dr. Maria Garcia,5,1,Thursday,Friday,close,open,mid,12/25/2024,Central
 ```
 
 ### Minimal Example
 ```csv
-Name,Days per Week,Saturdays per Month,Preferred Weekday Off,Shift Preference,PTO Date
-John Smith,4,2,,open,
-Sarah Johnson,5,1,Monday,mid,12/24/2024
+Name,Days per Week,Saturdays per Month,Preferred Weekday Off,Shift Preference,PTO Date,Location
+John Smith,4,2,,open,,Central
+Sarah Johnson,5,1,Monday,mid,12/24/2024,Edmonds
 ```
 
 ## Data Validation Rules
@@ -87,6 +96,7 @@ Sarah Johnson,5,1,Monday,mid,12/24/2024
 - **Name**: Must not be empty or whitespace
 - **Days per Week**: Must be a positive integer (1-7)
 - **Saturdays per Month**: Must be a non-negative integer (0-4)
+- **Location**: Must be "Central" or "Edmonds"
 
 ### Optional Fields
 - **Preferred Weekday Off**: Can be empty or contain valid day names

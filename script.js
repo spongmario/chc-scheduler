@@ -75,7 +75,7 @@ class CHCScheduler {
         }
 
         const headers = data[0].map(h => h ? h.toString().toLowerCase().trim() : '');
-        const expectedHeaders = ['name', 'days per week', 'saturdays per month', 'preferred weekday off', 'shift preferance', 'pto date'];
+        const expectedHeaders = ['name', 'days per week', 'saturdays per month', 'preferred weekday off', 'shift preferance', 'pto date', 'location'];
         
         // Find column indices
         const columnMap = {};
@@ -99,7 +99,8 @@ class CHCScheduler {
                 saturdaysPerMonth: parseInt(row[columnMap['saturdays per month']]) || 0,
                 preferredDaysOff: this.parseDayOfWeek(row[columnMap['preferred weekday off']]),
                 shiftPreferences: this.parseShiftPreference(row[columnMap['shift preferance']]),
-                ptoDates: this.parsePTODates(row[columnMap['pto date']])
+                ptoDates: this.parsePTODates(row[columnMap['pto date']]),
+                location: row[columnMap['location']] ? row[columnMap['location']].toString().trim() : 'Central'
             };
 
             if (provider.name && provider.daysPerWeek > 0) {
@@ -309,40 +310,148 @@ class CHCScheduler {
         const month = parseInt(this.selectedMonth.split('-')[1]) - 1; // JavaScript months are 0-indexed
         
         const daysInMonth = new Date(year, month + 1, 0).getDate();
+        
+        // Separate providers by location
+        const providersByLocation = this.separateProvidersByLocation();
+        
+        // Initialize schedule structure for each location
         const schedule = {};
+        
+        for (const location in providersByLocation) {
+            schedule[location] = {};
+            
+            // Initialize schedule structure for this location (skip Sundays since clinic is closed)
+            for (let day = 1; day <= daysInMonth; day++) {
+                const date = new Date(year, month, day);
+                const dayOfWeek = date.getDay();
+                
+                // Skip Sundays - clinic is closed
+                if (dayOfWeek === 0) continue;
+                
+                const holidayInfo = this.isHoliday(date);
+                
+                schedule[location][day] = {
+                    date: date,
+                    dayOfWeek: dayOfWeek,
+                    shifts: { open: [], mid: [], close: [] },
+                    isWeekend: dayOfWeek === 6, // Only Saturday is weekend now
+                    isHoliday: holidayInfo.isHoliday,
+                    holidayName: holidayInfo.name
+                };
+            }
 
-        // Initialize schedule structure (skip Sundays since clinic is closed)
-        for (let day = 1; day <= daysInMonth; day++) {
-            const date = new Date(year, month, day);
-            const dayOfWeek = date.getDay();
-            
-            // Skip Sundays - clinic is closed
-            if (dayOfWeek === 0) continue;
-            
-            const holidayInfo = this.isHoliday(date);
-            
-            schedule[day] = {
-                date: date,
-                dayOfWeek: dayOfWeek,
-                shifts: { open: [], mid: [], close: [] },
-                isWeekend: dayOfWeek === 6, // Only Saturday is weekend now
-                isHoliday: holidayInfo.isHoliday,
-                holidayName: holidayInfo.name
-            };
+            // Calculate total shifts needed for this location
+            const totalWeekdays = this.getWeekdaysInMonth(year, month);
+            const totalSaturdays = this.getSaturdaysInMonth(year, month);
+            const totalHolidays = this.getHolidaysInMonth(year, month);
+            // Holidays count as paid shifts for ALL providers at this location
+            // Saturdays now only need 1 shift (mid) instead of 2
+            const totalShifts = totalWeekdays * 3 + totalSaturdays * 1 + (totalHolidays * providersByLocation[location].length);
+
+            // Distribute shifts among providers for this location
+            this.distributeShiftsForLocation(schedule[location], totalShifts, providersByLocation[location]);
         }
 
-        // Calculate total shifts needed (excluding holidays but counting them as paid shifts)
-        const totalWeekdays = this.getWeekdaysInMonth(year, month);
-        const totalSaturdays = this.getSaturdaysInMonth(year, month);
-        const totalHolidays = this.getHolidaysInMonth(year, month);
-        // Holidays count as paid shifts for ALL providers, so we add them to the total
-        // Saturdays now only need 1 shift (mid) instead of 2
-        const totalShifts = totalWeekdays * 3 + totalSaturdays * 1 + (totalHolidays * this.providers.length);
-
-        // Distribute shifts among providers
-        this.distributeShifts(schedule, totalShifts);
-
         this.schedule = schedule;
+    }
+
+    separateProvidersByLocation() {
+        const providersByLocation = {};
+        
+        for (const provider of this.providers) {
+            const location = provider.location || 'Central';
+            if (!providersByLocation[location]) {
+                providersByLocation[location] = [];
+            }
+            providersByLocation[location].push(provider);
+        }
+        
+        return providersByLocation;
+    }
+
+    distributeShiftsForLocation(schedule, totalShifts, locationProviders) {
+        // Create a working copy of providers with current assignments
+        const workingProviders = locationProviders.map(p => ({
+            ...p,
+            assignedDays: 0,
+            assignedSaturdays: 0,
+            assignedHolidays: 0,
+            currentShifts: []
+        }));
+
+        // First, give ALL providers credit for holidays
+        for (const day in schedule) {
+            const dayData = schedule[day];
+            const isHoliday = dayData.isHoliday;
+
+            if (isHoliday) {
+                // ALL providers get credit for holidays - no actual work but counts as a shift
+                workingProviders.forEach(provider => {
+                    provider.assignedDays++;
+                    provider.assignedHolidays++;
+                    provider.currentShifts.push({ day: parseInt(day), shiftType: 'holiday' });
+                });
+                // Mark this as a holiday for display purposes
+                dayData.shifts.holiday = [dayData.holidayName];
+            }
+        }
+
+        // Then distribute regular work shifts with day ranking consideration
+        this.distributeShiftsWithRankingForLocation(schedule, workingProviders);
+    }
+
+    distributeShiftsWithRankingForLocation(schedule, workingProviders) {
+        // NEW LOGIC: Prioritize Saturday assignments for providers who WANT to work Saturdays (2+)
+        // This ensures they get their preferred Saturday shifts before being assigned weekdays
+        
+        // First, get all non-holiday days and separate Saturdays from weekdays
+        const saturdaysToSchedule = [];
+        const weekdaysToSchedule = [];
+        
+        for (const day in schedule) {
+            const dayData = schedule[day];
+            if (!dayData.isHoliday) {
+                if (dayData.dayOfWeek === 6) {
+                    // Saturday
+                    saturdaysToSchedule.push({
+                        day: parseInt(day),
+                        dayData: dayData
+                    });
+                } else {
+                    // Weekday
+                    weekdaysToSchedule.push({
+                        day: parseInt(day),
+                        dayData: dayData,
+                        ranking: this.dayRanking[dayData.dayOfWeek] || 999
+                    });
+                }
+            }
+        }
+        
+        // Sort weekdays by ranking (lower number = higher priority for 3 providers)
+        weekdaysToSchedule.sort((a, b) => a.ranking - b.ranking);
+        
+        // STEP 1: Assign ALL Saturday shifts FIRST
+        // This ensures providers who want Saturdays get them before being assigned weekdays
+        console.log('Assigning Saturday shifts first...');
+        for (const { day, dayData } of saturdaysToSchedule) {
+            this.assignSaturdayShift(workingProviders, dayData, day);
+        }
+        
+        // STEP 2: Assign weekday shifts
+        // Now assign weekdays, with providers who got their Saturday preferences having less weekday availability
+        console.log('Assigning weekday shifts...');
+        for (const { day, dayData } of weekdaysToSchedule) {
+            const isThursday = dayData.dayOfWeek === 4;
+
+            // Thursday: only mid shift, target 2 providers, allow 3 if needed, allow 1 if no other options
+            if (isThursday) {
+                this.assignThursdayShifts(workingProviders, dayData, day);
+            } else {
+                // Other weekdays: prioritize open and close shifts before mid shift
+                this.assignWeekdayShifts(workingProviders, dayData, day);
+            }
+        }
     }
 
     getWeekdaysInMonth(year, month) {
@@ -956,115 +1065,123 @@ class CHCScheduler {
 
         let html = this.generatePreferencesTable();
         html += '<div class="schedule-separator"></div>';
-        html += '<table class="calendar"><thead><tr>';
-        html += '<th>Date</th><th>Day</th><th>Open</th><th>Mid</th><th>Close</th><th>Holiday</th><th>PTO Today</th></tr></thead><tbody>';
 
-        for (const day in this.schedule) {
-            const dayData = this.schedule[day];
-            const dayNum = parseInt(day);
-            const date = new Date(year, month, dayNum);
-            const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-            
-            html += '<tr>';
-            html += `<td>${dayNum}</td>`;
-            html += `<td class="${dayData.isWeekend ? 'weekend' : ''} ${dayData.isHoliday ? 'holiday' : ''}">${dayNames[dayData.dayOfWeek]}</td>`;
-            
-            // Display shifts
-            const isSaturday = dayData.dayOfWeek === 6;
-            const isThursday = dayData.dayOfWeek === 4;
-            
-            if (isThursday) {
-                // Thursday: only show mid shift, hide open and close
-                html += '<td class="thursday-off">-</td>'; // Open column
-                const midProviders = dayData.shifts.mid || [];
-                html += `<td class="thursday-mid">`;
-                if (midProviders.length > 0) {
-                    midProviders.forEach((provider, index) => {
-                        const isPTO = this.providers.find(p => p.name === provider)?.ptoDates.some(ptoDate => 
-                            ptoDate.getDate() === dayNum && ptoDate.getMonth() === month && ptoDate.getFullYear() === year
-                        );
-                        if (index > 0) html += '<br>'; // Add line break for multiple providers
-                        html += `<span class="shift mid ${isPTO ? 'pto' : ''}">${provider}</span>`;
-                    });
-                } else {
-                    html += '<span class="shift off">OFF</span>';
-                }
-                html += '</td>';
-                html += '<td class="thursday-off">-</td>'; // Close column
-            } else if (isSaturday) {
-                // Saturday: only show mid shift, hide open and close
-                html += '<td class="saturday-off">-</td>'; // Open column
-                const midProviders = dayData.shifts.mid || [];
-                html += `<td>`;
-                if (midProviders.length > 0) {
-                    midProviders.forEach(provider => {
-                        const isPTO = this.providers.find(p => p.name === provider)?.ptoDates.some(ptoDate => 
-                            ptoDate.getDate() === dayNum && ptoDate.getMonth() === month && ptoDate.getFullYear() === year
-                        );
-                        html += `<span class="shift mid ${isPTO ? 'pto' : ''}">${provider}</span>`;
-                    });
-                } else {
-                    html += '<span class="shift off">OFF</span>';
-                }
-                html += '</td>';
-                html += '<td class="saturday-off">-</td>'; // Close column
-            } else {
-                // Other weekdays: show all shifts
-                ['open', 'mid', 'close'].forEach(shiftType => {
-                    const providers = dayData.shifts[shiftType] || [];
-                    html += `<td>`;
-                    if (providers.length > 0) {
-                        providers.forEach(provider => {
+        // Display schedule for each location
+        for (const location in this.schedule) {
+            html += `<div class="location-schedule">`;
+            html += `<h3 class="location-header">${location} Location</h3>`;
+            html += '<table class="calendar"><thead><tr>';
+            html += '<th>Date</th><th>Day</th><th>Open</th><th>Mid</th><th>Close</th><th>Holiday</th><th>PTO Today</th></tr></thead><tbody>';
+
+            for (const day in this.schedule[location]) {
+                const dayData = this.schedule[location][day];
+                const dayNum = parseInt(day);
+                const date = new Date(year, month, dayNum);
+                const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+                
+                html += '<tr>';
+                html += `<td>${dayNum}</td>`;
+                html += `<td class="${dayData.isWeekend ? 'weekend' : ''} ${dayData.isHoliday ? 'holiday' : ''}">${dayNames[dayData.dayOfWeek]}</td>`;
+                
+                // Display shifts
+                const isSaturday = dayData.dayOfWeek === 6;
+                const isThursday = dayData.dayOfWeek === 4;
+                
+                if (isThursday) {
+                    // Thursday: only show mid shift, hide open and close
+                    html += '<td class="thursday-off">-</td>'; // Open column
+                    const midProviders = dayData.shifts.mid || [];
+                    html += `<td class="thursday-mid">`;
+                    if (midProviders.length > 0) {
+                        midProviders.forEach((provider, index) => {
                             const isPTO = this.providers.find(p => p.name === provider)?.ptoDates.some(ptoDate => 
                                 ptoDate.getDate() === dayNum && ptoDate.getMonth() === month && ptoDate.getFullYear() === year
                             );
-                            html += `<span class="shift ${shiftType} ${isPTO ? 'pto' : ''}">${provider}</span>`;
+                            if (index > 0) html += '<br>'; // Add line break for multiple providers
+                            html += `<span class="shift mid ${isPTO ? 'pto' : ''}">${provider}</span>`;
                         });
                     } else {
                         html += '<span class="shift off">OFF</span>';
                     }
                     html += '</td>';
-                });
-            }
-            
-            // Display Holiday column
-            html += '<td class="holiday-column">';
-            if (dayData.isHoliday) {
-                const holidayProvider = dayData.shifts.holiday ? dayData.shifts.holiday[0] : null;
-                if (holidayProvider) {
-                    html += `<span class="holiday-shift">${holidayProvider}</span>`;
+                    html += '<td class="thursday-off">-</td>'; // Close column
+                } else if (isSaturday) {
+                    // Saturday: only show mid shift, hide open and close
+                    html += '<td class="saturday-off">-</td>'; // Open column
+                    const midProviders = dayData.shifts.mid || [];
+                    html += `<td>`;
+                    if (midProviders.length > 0) {
+                        midProviders.forEach(provider => {
+                            const isPTO = this.providers.find(p => p.name === provider)?.ptoDates.some(ptoDate => 
+                                ptoDate.getDate() === dayNum && ptoDate.getMonth() === month && ptoDate.getFullYear() === year
+                            );
+                            html += `<span class="shift mid ${isPTO ? 'pto' : ''}">${provider}</span>`;
+                        });
+                    } else {
+                        html += '<span class="shift off">OFF</span>';
+                    }
+                    html += '</td>';
+                    html += '<td class="saturday-off">-</td>'; // Close column
                 } else {
-                    html += `<span class="holiday-name">${dayData.holidayName}</span>`;
+                    // Other weekdays: show all shifts
+                    ['open', 'mid', 'close'].forEach(shiftType => {
+                        const providers = dayData.shifts[shiftType] || [];
+                        html += `<td>`;
+                        if (providers.length > 0) {
+                            providers.forEach(provider => {
+                                const isPTO = this.providers.find(p => p.name === provider)?.ptoDates.some(ptoDate => 
+                                    ptoDate.getDate() === dayNum && ptoDate.getMonth() === month && ptoDate.getFullYear() === year
+                                );
+                                html += `<span class="shift ${shiftType} ${isPTO ? 'pto' : ''}">${provider}</span>`;
+                            });
+                        } else {
+                            html += '<span class="shift off">OFF</span>';
+                        }
+                        html += '</td>';
+                    });
                 }
-            } else {
-                html += '<span class="no-holiday">-</span>';
+                
+                // Display Holiday column
+                html += '<td class="holiday-column">';
+                if (dayData.isHoliday) {
+                    const holidayProvider = dayData.shifts.holiday ? dayData.shifts.holiday[0] : null;
+                    if (holidayProvider) {
+                        html += `<span class="holiday-shift">${holidayProvider}</span>`;
+                    } else {
+                        html += `<span class="holiday-name">${dayData.holidayName}</span>`;
+                    }
+                } else {
+                    html += '<span class="no-holiday">-</span>';
+                }
+                html += '</td>';
+                
+                // Display PTO Today column
+                html += '<td class="pto-column">';
+                const ptoToday = this.providers.filter(provider => 
+                    provider.location === location && provider.ptoDates.some(ptoDate => {
+                        const ptoDateNormalized = new Date(ptoDate.getFullYear(), ptoDate.getMonth(), ptoDate.getDate());
+                        const scheduleDateNormalized = new Date(year, month, dayNum);
+                        return ptoDateNormalized.getTime() === scheduleDateNormalized.getTime();
+                    })
+                );
+                
+                if (ptoToday.length > 0) {
+                    ptoToday.forEach((provider, index) => {
+                        if (index > 0) html += ', ';
+                        html += `<span class="pto-name">${provider.name}</span>`;
+                    });
+                } else {
+                    html += '<span class="no-pto">-</span>';
+                }
+                html += '</td>';
+                
+                html += '</tr>';
             }
-            html += '</td>';
             
-            // Display PTO Today column
-            html += '<td class="pto-column">';
-            const ptoToday = this.providers.filter(provider => 
-                provider.ptoDates.some(ptoDate => {
-                    const ptoDateNormalized = new Date(ptoDate.getFullYear(), ptoDate.getMonth(), ptoDate.getDate());
-                    const scheduleDateNormalized = new Date(year, month, dayNum);
-                    return ptoDateNormalized.getTime() === scheduleDateNormalized.getTime();
-                })
-            );
-            
-            if (ptoToday.length > 0) {
-                ptoToday.forEach((provider, index) => {
-                    if (index > 0) html += ', ';
-                    html += `<span class="pto-name">${provider.name}</span>`;
-                });
-            } else {
-                html += '<span class="no-pto">-</span>';
-            }
-            html += '</td>';
-            
-            html += '</tr>';
+            html += '</tbody></table>';
+            html += '</div>';
         }
 
-        html += '</tbody></table>';
         container.innerHTML = html;
 
         document.getElementById('schedule-results').classList.remove('hidden');
@@ -1075,54 +1192,60 @@ class CHCScheduler {
         const month = parseInt(this.selectedMonth.split('-')[1]) - 1;
         const monthName = new Date(year, month).toLocaleString('default', { month: 'long' });
 
-        // Create export data
-        const exportData = [];
-        exportData.push(['Date', 'Day', 'Open', 'Mid', 'Close', 'Holiday', 'PTO Today']);
+        // Create workbook with multiple sheets for each location
+        const wb = XLSX.utils.book_new();
 
-        for (const day in this.schedule) {
-            const dayData = this.schedule[day];
-            const dayNum = parseInt(day);
-            const date = new Date(year, month, dayNum);
-            const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-            
-            // Get PTO for this day
-            const ptoToday = this.providers.filter(provider => 
-                provider.ptoDates.some(ptoDate => {
-                    const ptoDateNormalized = new Date(ptoDate.getFullYear(), ptoDate.getMonth(), ptoDate.getDate());
-                    const scheduleDateNormalized = new Date(year, month, dayNum);
-                    return ptoDateNormalized.getTime() === scheduleDateNormalized.getTime();
-                })
-            ).map(provider => provider.name).join(', ');
-            
-            // Get holiday information
-            let holidayInfo = '-';
-            if (dayData.isHoliday) {
-                const holidayProvider = dayData.shifts.holiday ? dayData.shifts.holiday[0] : null;
-                if (holidayProvider) {
-                    holidayInfo = `${dayData.holidayName} (${holidayProvider})`;
-                } else {
-                    holidayInfo = dayData.holidayName;
+        for (const location in this.schedule) {
+            // Create export data for this location
+            const exportData = [];
+            exportData.push(['Date', 'Day', 'Open', 'Mid', 'Close', 'Holiday', 'PTO Today']);
+
+            for (const day in this.schedule[location]) {
+                const dayData = this.schedule[location][day];
+                const dayNum = parseInt(day);
+                const date = new Date(year, month, dayNum);
+                const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+                
+                // Get PTO for this day for this location
+                const ptoToday = this.providers.filter(provider => 
+                    provider.location === location && provider.ptoDates.some(ptoDate => {
+                        const ptoDateNormalized = new Date(ptoDate.getFullYear(), ptoDate.getMonth(), ptoDate.getDate());
+                        const scheduleDateNormalized = new Date(year, month, dayNum);
+                        return ptoDateNormalized.getTime() === scheduleDateNormalized.getTime();
+                    })
+                ).map(provider => provider.name).join(', ');
+                
+                // Get holiday information
+                let holidayInfo = '-';
+                if (dayData.isHoliday) {
+                    const holidayProvider = dayData.shifts.holiday ? dayData.shifts.holiday[0] : null;
+                    if (holidayProvider) {
+                        holidayInfo = `${dayData.holidayName} (${holidayProvider})`;
+                    } else {
+                        holidayInfo = dayData.holidayName;
+                    }
                 }
+
+                const isSaturday = dayData.dayOfWeek === 6;
+                const isThursday = dayData.dayOfWeek === 4;
+                const row = [
+                    `${monthName} ${dayNum}`,
+                    dayNames[dayData.dayOfWeek],
+                    (isSaturday || isThursday) ? '-' : (dayData.shifts.open || []).join(', '),
+                    (dayData.shifts.mid || []).join(', '),
+                    (isSaturday || isThursday) ? '-' : (dayData.shifts.close || []).join(', '),
+                    holidayInfo,
+                    ptoToday || '-'
+                ];
+                exportData.push(row);
             }
 
-            const isSaturday = dayData.dayOfWeek === 6;
-            const isThursday = dayData.dayOfWeek === 4;
-            const row = [
-                `${monthName} ${dayNum}`,
-                dayNames[dayData.dayOfWeek],
-                (isSaturday || isThursday) ? '-' : (dayData.shifts.open || []).join(', '),
-                (dayData.shifts.mid || []).join(', '),
-                (isSaturday || isThursday) ? '-' : (dayData.shifts.close || []).join(', '),
-                holidayInfo,
-                ptoToday || '-'
-            ];
-            exportData.push(row);
+            // Create worksheet for this location
+            const ws = XLSX.utils.aoa_to_sheet(exportData);
+            XLSX.utils.book_append_sheet(wb, ws, `${location} Schedule`);
         }
 
-        // Create workbook and download
-        const ws = XLSX.utils.aoa_to_sheet(exportData);
-        const wb = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(wb, ws, 'Schedule');
+        // Download the workbook
         XLSX.writeFile(wb, `CHC_Schedule_${monthName}_${year}.xlsx`);
     }
 
