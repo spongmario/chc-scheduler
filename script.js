@@ -75,7 +75,7 @@ class CHCScheduler {
         }
 
         const headers = data[0].map(h => h ? h.toString().toLowerCase().trim() : '');
-        const expectedHeaders = ['name', 'days per week', 'saturdays per month', 'preferred weekday off', 'shift preference', 'pto date'];
+        const expectedHeaders = ['name', 'days per week', 'saturdays per month', 'preferred weekday off', 'shift preferance', 'pto date'];
         
         // Find column indices
         const columnMap = {};
@@ -98,7 +98,7 @@ class CHCScheduler {
                 daysPerWeek: parseInt(row[columnMap['days per week']]) || 0,
                 saturdaysPerMonth: parseInt(row[columnMap['saturdays per month']]) || 0,
                 preferredDaysOff: this.parseDayOfWeek(row[columnMap['preferred weekday off']]),
-                shiftPreferences: this.parseShiftPreference(row[columnMap['shift preference']]),
+                shiftPreferences: this.parseShiftPreference(row[columnMap['shift preferance']]),
                 ptoDates: this.parsePTODates(row[columnMap['pto date']])
             };
 
@@ -446,13 +446,7 @@ class CHCScheduler {
             }
             // Saturday: only 1 provider assigned to "mid" shift
             else if (isSaturday) {
-                const provider = this.selectProviderForShift(workingProviders, dayData, 'mid', isSaturday);
-                if (provider) {
-                    dayData.shifts.mid.push(provider.name);
-                    provider.assignedDays++;
-                    provider.assignedSaturdays++;
-                    provider.currentShifts.push({ day: day, shiftType: 'mid' });
-                }
+                this.assignSaturdayShift(workingProviders, dayData, day);
             } else {
                 // Other weekdays: prioritize open and close shifts before mid shift
                 this.assignWeekdayShifts(workingProviders, dayData, day);
@@ -494,9 +488,9 @@ class CHCScheduler {
             }
         }
         
-        // If we still have 0 providers, try one more time with relaxed constraints
+        // If we still have 0 providers, try emergency fallback
         if (assignedProviders === 0) {
-            const fallbackProvider = this.selectProviderForThursdayFallback(workingProviders, dayData);
+            const fallbackProvider = this.selectProviderForEmergencyFallback(workingProviders, dayData, 'mid', false);
             if (fallbackProvider) {
                 dayData.shifts.mid.push(fallbackProvider.name);
                 fallbackProvider.assignedDays++;
@@ -506,15 +500,38 @@ class CHCScheduler {
         }
     }
 
+    assignSaturdayShift(workingProviders, dayData, day) {
+        // Saturday: only 1 provider assigned to "mid" shift
+        // Use emergency fallback if no providers meet normal criteria
+        
+        let provider = this.selectProviderForShift(workingProviders, dayData, 'mid', true);
+        
+        // If no provider found with normal criteria, use emergency fallback
+        if (!provider) {
+            provider = this.selectProviderForEmergencyFallback(workingProviders, dayData, 'mid', true);
+        }
+        
+        if (provider) {
+            dayData.shifts.mid.push(provider.name);
+            provider.assignedDays++;
+            provider.assignedSaturdays++;
+            provider.currentShifts.push({ day: day, shiftType: 'mid' });
+        }
+    }
+
     assignWeekdayShifts(workingProviders, dayData, day) {
         // Weekday constraints: prioritize open and close shifts before mid shift
         // Maximum 3 providers per day, with day ranking for 3-provider priority
+        // Use emergency fallback if no providers meet normal criteria
         
         const maxProviders = 3;
         let assignedProviders = 0;
         
         // First, assign open shift (highest priority)
-        const openProvider = this.selectProviderForShift(workingProviders, dayData, 'open', false);
+        let openProvider = this.selectProviderForShift(workingProviders, dayData, 'open', false);
+        if (!openProvider) {
+            openProvider = this.selectProviderForEmergencyFallback(workingProviders, dayData, 'open', false);
+        }
         if (openProvider) {
             dayData.shifts.open.push(openProvider.name);
             openProvider.assignedDays++;
@@ -523,7 +540,10 @@ class CHCScheduler {
         }
         
         // Second, assign close shift (second priority)
-        const closeProvider = this.selectProviderForShift(workingProviders, dayData, 'close', false);
+        let closeProvider = this.selectProviderForShift(workingProviders, dayData, 'close', false);
+        if (!closeProvider) {
+            closeProvider = this.selectProviderForEmergencyFallback(workingProviders, dayData, 'close', false);
+        }
         if (closeProvider) {
             dayData.shifts.close.push(closeProvider.name);
             closeProvider.assignedDays++;
@@ -533,7 +553,10 @@ class CHCScheduler {
         
         // Finally, assign mid shift (lowest priority) - only if we haven't reached max providers
         if (assignedProviders < maxProviders) {
-            const midProvider = this.selectProviderForShift(workingProviders, dayData, 'mid', false);
+            let midProvider = this.selectProviderForShift(workingProviders, dayData, 'mid', false);
+            if (!midProvider) {
+                midProvider = this.selectProviderForEmergencyFallback(workingProviders, dayData, 'mid', false);
+            }
             if (midProvider) {
                 dayData.shifts.mid.push(midProvider.name);
                 midProvider.assignedDays++;
@@ -543,16 +566,48 @@ class CHCScheduler {
         }
     }
 
-    selectProviderForThursdayFallback(providers, dayData) {
-        // Fallback method for Thursday when no providers meet normal criteria
-        // This allows assigning providers even if they have preferred days off on Thursday
+
+    getDaysWorkedThisWeek(provider, currentDate) {
+        // Calculate how many days this provider has worked in the current week
+        // This includes ALL shifts (weekdays AND Saturdays) - days per week is total shifts per week
+        // Week starts on Sunday (day 0) and ends on Saturday (day 6)
+        
+        const currentDayOfWeek = currentDate.getDay();
+        const currentDay = currentDate.getDate();
+        
+        // Calculate the start of the current week (Sunday)
+        const startOfWeek = new Date(currentDate);
+        startOfWeek.setDate(currentDay - currentDayOfWeek);
+        
+        // Count days worked in the current week (including Saturdays)
+        let daysWorkedThisWeek = 0;
+        
+        for (let i = 0; i < 7; i++) {
+            const weekDay = new Date(startOfWeek);
+            weekDay.setDate(startOfWeek.getDate() + i);
+            const weekDayNum = weekDay.getDate();
+            
+            // Check if provider worked on this day (any shift type)
+            const workedThisDay = provider.currentShifts.some(shift => shift.day === weekDayNum);
+            if (workedThisDay) {
+                daysWorkedThisWeek++;
+            }
+        }
+        
+        return daysWorkedThisWeek;
+    }
+
+    selectProviderForEmergencyFallback(providers, dayData, shiftType, isSaturday) {
+        // Emergency fallback method when no providers meet normal criteria
+        // This ensures clinic coverage by relaxing constraints as needed
+        // BUT NEVER exceeds days per week limits - this is a hard constraint
         
         const availableProviders = providers.filter(p => {
             // Check if already assigned today
             const assignedToday = p.currentShifts.some(s => s.day === dayData.date.getDate());
             if (assignedToday) return false;
 
-            // Check PTO - use more robust date comparison
+            // Check PTO - still enforce this as it's a hard constraint
             const isOnPTO = p.ptoDates.some(ptoDate => {
                 const ptoDateNormalized = new Date(ptoDate.getFullYear(), ptoDate.getMonth(), ptoDate.getDate());
                 const scheduleDateNormalized = new Date(dayData.date.getFullYear(), dayData.date.getMonth(), dayData.date.getDate());
@@ -560,26 +615,91 @@ class CHCScheduler {
             });
             if (isOnPTO) return false;
 
-            // For fallback, we'll ignore preferred days off on Thursday
-            // Check Saturday limits (not applicable for Thursday)
+            // Check days per week limit - NEVER exceed this, even in emergency
+            const daysWorkedThisWeek = this.getDaysWorkedThisWeek(p, dayData.date);
+            if (daysWorkedThisWeek >= p.daysPerWeek) return false;
+
+            // For emergency fallback, we'll ignore:
+            // - Preferred days off
+            // - Saturday limits
+            // But we STILL enforce days per week limits
             return true;
         });
 
-        if (availableProviders.length === 0) return null;
+        if (availableProviders.length === 0) {
+            // If no providers available due to days per week constraints,
+            // find the provider who is closest to their limit but hasn't reached it
+            const allProviders = providers.filter(p => {
+                const assignedToday = p.currentShifts.some(s => s.day === dayData.date.getDate());
+                if (assignedToday) return false;
 
-        // Score providers - prefer those who haven't worked as much
+                const isOnPTO = p.ptoDates.some(ptoDate => {
+                    const ptoDateNormalized = new Date(ptoDate.getFullYear(), ptoDate.getMonth(), ptoDate.getDate());
+                    const scheduleDateNormalized = new Date(dayData.date.getFullYear(), dayData.date.getMonth(), dayData.date.getDate());
+                    return ptoDateNormalized.getTime() === scheduleDateNormalized.getTime();
+                });
+                if (isOnPTO) return false;
+
+                return true;
+            });
+
+            if (allProviders.length === 0) return null;
+
+            // Find provider closest to their days per week limit
+            const closestToLimit = allProviders.reduce((closest, current) => {
+                const currentDaysWorked = this.getDaysWorkedThisWeek(current, dayData.date);
+                const closestDaysWorked = this.getDaysWorkedThisWeek(closest, dayData.date);
+                
+                // If current provider is closer to their limit, use them
+                if (currentDaysWorked > closestDaysWorked) {
+                    return current;
+                }
+                return closest;
+            });
+
+            // Only return this provider if they haven't reached their limit
+            const daysWorked = this.getDaysWorkedThisWeek(closestToLimit, dayData.date);
+            if (daysWorked < closestToLimit.daysPerWeek) {
+                return closestToLimit;
+            }
+
+            return null;
+        }
+
+        // Score providers - prefer those who haven't worked as much overall
         const scoredProviders = availableProviders.map(p => {
             let score = 0;
 
-            // Prefer providers who haven't worked as much
-            score += (10 - p.assignedDays) * 10;
+            // Prefer providers who haven't worked as much overall
+            score += (10 - p.assignedDays) * 20;
 
-            // Prefer shift preference match for mid shift
-            const shiftPreferenceIndex = p.shiftPreferences.indexOf('mid');
+            // Prefer shift preference match
+            const shiftPreferenceIndex = p.shiftPreferences.indexOf(shiftType);
             if (shiftPreferenceIndex !== -1) {
-                score += (p.shiftPreferences.length - shiftPreferenceIndex) * 20;
+                score += (p.shiftPreferences.length - shiftPreferenceIndex) * 10;
             } else {
                 score += Math.random() * 5;
+            }
+
+            // For Saturday assignments in emergency fallback, follow the same priority logic
+            if (isSaturday) {
+                const saturdaysNeeded = p.saturdaysPerMonth - p.assignedSaturdays;
+                
+                if (p.saturdaysPerMonth >= 2) {
+                    // Providers who WANT to work Saturdays (2+ requested)
+                    if (saturdaysNeeded > 0) {
+                        score += saturdaysNeeded * 100; // High priority for providers who WANT Saturday shifts
+                    } else {
+                        score += -50; // Penalty for providers who have reached their desired Saturday limit
+                    }
+                } else if (p.saturdaysPerMonth === 1) {
+                    // Providers who don't WANT to work Saturdays but can be assigned if needed
+                    if (saturdaysNeeded > 0) {
+                        score += 25; // Lower priority for providers who don't want Saturday shifts
+                    } else {
+                        score += -100; // Strong penalty for providers who don't want Saturday shifts and have been assigned
+                    }
+                }
             }
 
             // Random factor to break ties
@@ -612,8 +732,13 @@ class CHCScheduler {
             // Check if it's a preferred day off (any of their preferences)
             if (p.preferredDaysOff.includes(dayData.dayOfWeek)) return false;
 
-            // Check Saturday limits
-            if (isSaturday && p.assignedSaturdays >= p.saturdaysPerMonth) return false;
+            // Check days per week limit
+            const daysWorkedThisWeek = this.getDaysWorkedThisWeek(p, dayData.date);
+            if (daysWorkedThisWeek >= p.daysPerWeek) return false;
+
+            // For Saturday assignments, be more flexible with Saturday limits
+            // Only filter out if they've exceeded their limit by more than 1
+            if (isSaturday && p.assignedSaturdays > p.saturdaysPerMonth) return false;
 
             return true;
         });
@@ -624,8 +749,21 @@ class CHCScheduler {
         const scoredProviders = availableProviders.map(p => {
             let score = 0;
 
-            // Prefer providers who haven't worked as much
-            score += (10 - p.assignedDays) * 10;
+            // Calculate days per week progress
+            const daysWorkedThisWeek = this.getDaysWorkedThisWeek(p, dayData.date);
+            const daysNeededThisWeek = p.daysPerWeek;
+            const daysRemainingThisWeek = daysNeededThisWeek - daysWorkedThisWeek;
+            
+            // Strongly prefer providers who need more days to reach their weekly target
+            if (daysRemainingThisWeek > 0) {
+                score += daysRemainingThisWeek * 50; // High priority for providers who need days
+            } else {
+                // If they've reached their weekly limit, they shouldn't be available anyway
+                score += -100; // Penalty for providers at their limit
+            }
+
+            // Prefer providers who haven't worked as much overall (secondary factor)
+            score += (10 - p.assignedDays) * 5;
 
             // Prefer shift preference match (check in order of preference)
             const shiftPreferenceIndex = p.shiftPreferences.indexOf(shiftType);
@@ -637,8 +775,28 @@ class CHCScheduler {
                 score += Math.random() * 5;
             }
 
-            // Prefer providers who need more Saturday shifts
-            if (isSaturday && p.assignedSaturdays < p.saturdaysPerMonth) score += 30;
+            // Saturday assignment priority logic:
+            // 1. Providers with 2+ Saturdays WANT to work Saturdays - highest priority
+            // 2. Providers with 1 Saturday don't WANT to work Saturdays but can be assigned if needed
+            if (isSaturday) {
+                const saturdaysNeeded = p.saturdaysPerMonth - p.assignedSaturdays;
+                
+                if (p.saturdaysPerMonth >= 2) {
+                    // Providers who WANT to work Saturdays (2+ requested)
+                    if (saturdaysNeeded > 0) {
+                        score += saturdaysNeeded * 200; // Very high priority for providers who WANT Saturday shifts
+                    } else {
+                        score += -100; // Penalty for providers who have reached their desired Saturday limit
+                    }
+                } else if (p.saturdaysPerMonth === 1) {
+                    // Providers who don't WANT to work Saturdays but can be assigned if needed
+                    if (saturdaysNeeded > 0) {
+                        score += 50; // Lower priority for providers who don't want Saturday shifts
+                    } else {
+                        score += -200; // Strong penalty for providers who don't want Saturday shifts and have been assigned
+                    }
+                }
+            }
 
             // Random factor to break ties
             score += Math.random() * 10;
