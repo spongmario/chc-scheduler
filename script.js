@@ -1399,13 +1399,17 @@ class CHCScheduler {
 
         let html = this.generatePreferencesTable();
         html += '<div class="schedule-separator"></div>';
+        
+        // Add issue analysis dashboard
+        html += this.generateIssueAnalysisDashboard();
+        html += '<div class="schedule-separator"></div>';
 
         // Display schedule for each location
         for (const location in this.schedule) {
             html += `<div class="location-schedule">`;
             html += `<h3 class="location-header">${location} Location</h3>`;
             html += '<table class="calendar"><thead><tr>';
-            html += '<th>Date</th><th>Day</th><th>Open</th><th>Mid</th><th>Close</th><th>Holiday</th><th>PTO Today</th></tr></thead><tbody>';
+            html += '<th>Date</th><th>Day</th><th>Open</th><th>Mid</th><th>Close</th><th>Holiday</th><th>PTO Today</th><th>Issues</th></tr></thead><tbody>';
 
             for (const day in this.schedule[location]) {
                 const dayData = this.schedule[location][day];
@@ -1509,6 +1513,18 @@ class CHCScheduler {
                 }
                 html += '</td>';
                 
+                // Add Issues column
+                html += '<td class="issues-column">';
+                const dayIssues = this.analyzeDayIssues(dayData, dayNum, month, year, location);
+                if (dayIssues.length > 0) {
+                    dayIssues.forEach(issue => {
+                        html += `<div class="issue-alert ${issue.severity}">${issue.message}</div>`;
+                    });
+                } else {
+                    html += '<span class="no-issues">✓</span>';
+                }
+                html += '</td>';
+                
                 html += '</tr>';
             }
             
@@ -1518,7 +1534,161 @@ class CHCScheduler {
 
         container.innerHTML = html;
 
+        // Add interactive features
+        this.addInteractiveFeatures();
+
         document.getElementById('schedule-results').classList.remove('hidden');
+    }
+
+    addInteractiveFeatures() {
+        // Add click handlers for issue items to highlight related calendar entries
+        document.querySelectorAll('.issue-item').forEach(item => {
+            item.addEventListener('click', (e) => {
+                const issueText = e.currentTarget.querySelector('.issue-text').textContent;
+                this.highlightRelatedEntries(issueText);
+            });
+        });
+
+        // Add hover effects for metric cards
+        document.querySelectorAll('.metric-card').forEach(card => {
+            card.addEventListener('mouseenter', (e) => {
+                this.showMetricDetails(e.currentTarget);
+            });
+        });
+
+        // Add click handlers for provider workload rows
+        document.querySelectorAll('.workload-table tbody tr').forEach(row => {
+            row.addEventListener('click', (e) => {
+                const providerName = e.currentTarget.querySelector('td:first-child').textContent;
+                this.highlightProviderSchedule(providerName);
+            });
+        });
+
+        // Add issue filtering buttons
+        this.addIssueFilteringButtons();
+    }
+
+    highlightRelatedEntries(issueText) {
+        // Remove previous highlights
+        document.querySelectorAll('.highlighted').forEach(el => {
+            el.classList.remove('highlighted');
+        });
+
+        // Highlight related calendar entries based on issue text
+        if (issueText.includes('understaffed')) {
+            document.querySelectorAll('.issue-alert.error').forEach(alert => {
+                if (alert.textContent.includes('Understaffed')) {
+                    alert.closest('tr').classList.add('highlighted');
+                }
+            });
+        } else if (issueText.includes('overworked')) {
+            const providerName = issueText.split(' ')[0];
+            document.querySelectorAll(`.shift`).forEach(shift => {
+                if (shift.textContent.includes(providerName)) {
+                    shift.classList.add('highlighted');
+                }
+            });
+        }
+    }
+
+    showMetricDetails(card) {
+        const metricType = card.querySelector('.metric-label').textContent.toLowerCase();
+        let details = '';
+        
+        switch(metricType) {
+            case 'total issues':
+                details = 'Total number of problems found in the schedule that need attention';
+                break;
+            case 'understaffed days':
+                details = 'Days with insufficient staff coverage (critical for patient safety)';
+                break;
+            case 'overworked providers':
+                details = 'Providers assigned more days than their target workload';
+                break;
+            case 'preference violations':
+                details = 'Times when providers are assigned shifts they don\'t prefer';
+                break;
+        }
+        
+        // Create tooltip
+        const tooltip = document.createElement('div');
+        tooltip.className = 'metric-tooltip';
+        tooltip.textContent = details;
+        card.appendChild(tooltip);
+        
+        // Remove tooltip after 3 seconds
+        setTimeout(() => {
+            if (tooltip.parentNode) {
+                tooltip.parentNode.removeChild(tooltip);
+            }
+        }, 3000);
+    }
+
+    highlightProviderSchedule(providerName) {
+        // Remove previous highlights
+        document.querySelectorAll('.highlighted').forEach(el => {
+            el.classList.remove('highlighted');
+        });
+
+        // Highlight all shifts for this provider
+        document.querySelectorAll(`.shift`).forEach(shift => {
+            if (shift.textContent.includes(providerName)) {
+                shift.classList.add('highlighted');
+                shift.closest('tr').classList.add('highlighted');
+            }
+        });
+    }
+
+    addIssueFilteringButtons() {
+        const dashboard = document.querySelector('.issue-dashboard');
+        if (!dashboard) return;
+
+        const filterContainer = document.createElement('div');
+        filterContainer.className = 'issue-filters';
+        filterContainer.innerHTML = `
+            <h4>🔍 Filter Issues</h4>
+            <div class="filter-buttons">
+                <button class="filter-btn active" data-filter="all">All Issues</button>
+                <button class="filter-btn" data-filter="error">Critical</button>
+                <button class="filter-btn" data-filter="warning">Warnings</button>
+                <button class="filter-btn" data-filter="understaffing">Understaffing</button>
+                <button class="filter-btn" data-filter="overworked">Overworked</button>
+                <button class="filter-btn" data-filter="preference">Preferences</button>
+            </div>
+        `;
+
+        dashboard.insertBefore(filterContainer, dashboard.querySelector('.issues-summary'));
+
+        // Add click handlers for filter buttons
+        filterContainer.querySelectorAll('.filter-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const filter = e.target.dataset.filter;
+                this.filterIssues(filter);
+                
+                // Update active button
+                filterContainer.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+                e.target.classList.add('active');
+            });
+        });
+    }
+
+    filterIssues(filter) {
+        const issueItems = document.querySelectorAll('.issue-item');
+        
+        issueItems.forEach(item => {
+            if (filter === 'all') {
+                item.style.display = 'flex';
+            } else if (filter === 'error') {
+                item.style.display = item.classList.contains('error') ? 'flex' : 'none';
+            } else if (filter === 'warning') {
+                item.style.display = item.classList.contains('warning') ? 'flex' : 'none';
+            } else {
+                // Filter by issue type
+                const issueText = item.querySelector('.issue-text').textContent.toLowerCase();
+                const show = issueText.includes(filter);
+                item.style.display = show ? 'flex' : 'none';
+            }
+        });
     }
 
     exportSchedule() {
@@ -1597,6 +1767,286 @@ class CHCScheduler {
         document.getElementById('error-text').textContent = message;
         document.getElementById('error-message').classList.remove('hidden');
         document.getElementById('schedule-results').classList.add('hidden');
+    }
+
+    generateIssueAnalysisDashboard() {
+        const analysis = this.performScheduleAnalysis();
+        
+        let html = '<div class="issue-dashboard">';
+        html += '<h3>📊 Schedule Analysis Dashboard</h3>';
+        
+        // Summary metrics
+        html += '<div class="metrics-grid">';
+        html += `<div class="metric-card ${analysis.totalIssues === 0 ? 'success' : 'warning'}">`;
+        html += `<div class="metric-number">${analysis.totalIssues}</div>`;
+        html += '<div class="metric-label">Total Issues</div>';
+        html += '</div>';
+        
+        html += `<div class="metric-card ${analysis.understaffedDays === 0 ? 'success' : 'error'}">`;
+        html += `<div class="metric-number">${analysis.understaffedDays}</div>`;
+        html += '<div class="metric-label">Understaffed Days</div>';
+        html += '</div>';
+        
+        html += `<div class="metric-card ${analysis.overworkedProviders === 0 ? 'success' : 'warning'}">`;
+        html += `<div class="metric-number">${analysis.overworkedProviders}</div>`;
+        html += '<div class="metric-label">Overworked Providers</div>';
+        html += '</div>';
+        
+        html += `<div class="metric-card ${analysis.preferenceViolations === 0 ? 'success' : 'warning'}">`;
+        html += `<div class="metric-number">${analysis.preferenceViolations}</div>`;
+        html += '<div class="metric-label">Preference Violations</div>';
+        html += '</div>';
+        html += '</div>';
+        
+        // Detailed issues
+        if (analysis.issues.length > 0) {
+            html += '<div class="issues-summary">';
+            html += '<h4>🚨 Issues Requiring Attention</h4>';
+            html += '<div class="issues-list">';
+            
+            analysis.issues.forEach(issue => {
+                html += `<div class="issue-item ${issue.severity}">`;
+                html += `<span class="issue-icon">${this.getIssueIcon(issue.type)}</span>`;
+                html += `<span class="issue-text">${issue.message}</span>`;
+                html += '</div>';
+            });
+            
+            html += '</div>';
+            html += '</div>';
+        }
+        
+        // Provider workload analysis
+        html += '<div class="workload-analysis">';
+        html += '<h4>👥 Provider Workload Analysis</h4>';
+        html += '<div class="workload-table">';
+        html += '<table><thead><tr><th>Provider</th><th>Days Assigned</th><th>Target Days</th><th>Saturday Coverage</th><th>Workload Status</th></tr></thead><tbody>';
+        
+        analysis.providerWorkload.forEach(provider => {
+            const statusClass = provider.status === 'balanced' ? 'success' : 
+                              provider.status === 'overworked' ? 'error' : 'warning';
+            html += `<tr class="${statusClass}">`;
+            html += `<td>${provider.name}</td>`;
+            html += `<td>${provider.assignedDays}</td>`;
+            html += `<td>${provider.targetDays}</td>`;
+            html += `<td>${provider.saturdayCoverage}</td>`;
+            html += `<td><span class="status-badge ${statusClass}">${provider.status}</span></td>`;
+            html += '</tr>';
+        });
+        
+        html += '</tbody></table>';
+        html += '</div>';
+        html += '</div>';
+        
+        html += '</div>';
+        return html;
+    }
+
+    performScheduleAnalysis() {
+        const analysis = {
+            totalIssues: 0,
+            understaffedDays: 0,
+            overworkedProviders: 0,
+            preferenceViolations: 0,
+            issues: [],
+            providerWorkload: []
+        };
+        
+        // Analyze each location
+        for (const location in this.schedule) {
+            const locationAnalysis = this.analyzeLocationSchedule(location);
+            analysis.totalIssues += locationAnalysis.issues.length;
+            analysis.understaffedDays += locationAnalysis.understaffedDays;
+            analysis.overworkedProviders += locationAnalysis.overworkedProviders;
+            analysis.preferenceViolations += locationAnalysis.preferenceViolations;
+            analysis.issues.push(...locationAnalysis.issues);
+            analysis.providerWorkload.push(...locationAnalysis.providerWorkload);
+        }
+        
+        return analysis;
+    }
+
+    analyzeLocationSchedule(location) {
+        const analysis = {
+            issues: [],
+            understaffedDays: 0,
+            overworkedProviders: 0,
+            preferenceViolations: 0,
+            providerWorkload: []
+        };
+        
+        const year = parseInt(this.selectedMonth.split('-')[0]);
+        const month = parseInt(this.selectedMonth.split('-')[1]) - 1;
+        
+        // Get providers for this location
+        const locationProviders = this.providers.filter(p => p.location === location);
+        const floatProviders = this.providers.filter(p => p.location === 'Float');
+        const allLocationProviders = [...locationProviders, ...floatProviders];
+        
+        // Track provider assignments
+        const providerStats = {};
+        allLocationProviders.forEach(provider => {
+            providerStats[provider.name] = {
+                assignedDays: 0,
+                assignedSaturdays: 0,
+                assignedHolidays: 0,
+                preferenceViolations: 0,
+                overworked: false
+            };
+        });
+        
+        // Analyze each day
+        for (const day in this.schedule[location]) {
+            const dayData = this.schedule[location][day];
+            const dayNum = parseInt(day);
+            const date = new Date(year, month, dayNum);
+            
+            // Check for understaffing
+            const totalShifts = (dayData.shifts.open?.length || 0) + 
+                               (dayData.shifts.mid?.length || 0) + 
+                               (dayData.shifts.close?.length || 0);
+            
+            if (!dayData.isHoliday && dayData.dayOfWeek !== 0) { // Not Sunday
+                // Only flag as understaffed if non-Saturday days have only 1 provider
+                if (dayData.dayOfWeek !== 6 && totalShifts === 1) {
+                    analysis.understaffedDays++;
+                    analysis.issues.push({
+                        type: 'understaffing',
+                        severity: 'error',
+                        message: `${location}: Day ${dayNum} understaffed (only 1 provider on weekday)`,
+                        location: location,
+                        day: dayNum
+                    });
+                }
+            }
+            
+            // Track provider assignments
+            ['open', 'mid', 'close'].forEach(shiftType => {
+                const providers = dayData.shifts[shiftType] || [];
+                providers.forEach(providerName => {
+                    if (providerStats[providerName]) {
+                        providerStats[providerName].assignedDays++;
+                        if (dayData.dayOfWeek === 6) {
+                            providerStats[providerName].assignedSaturdays++;
+                        }
+                        
+                        // Check for preference violations
+                        const provider = allLocationProviders.find(p => p.name === providerName);
+                        if (provider) {
+                            // Check if working on preferred day off
+                            if (provider.preferredDaysOff.includes(dayData.dayOfWeek)) {
+                                providerStats[providerName].preferenceViolations++;
+                                analysis.preferenceViolations++;
+                            }
+                            
+                            // Check if working shift they don't prefer
+                            if (provider.shiftPreferences.length > 0 && 
+                                !provider.shiftPreferences.includes(shiftType)) {
+                                providerStats[providerName].preferenceViolations++;
+                                analysis.preferenceViolations++;
+                            }
+                        }
+                    }
+                });
+            });
+        }
+        
+        // Analyze provider workload
+        allLocationProviders.forEach(provider => {
+            const stats = providerStats[provider.name];
+            const targetDays = provider.daysPerWeek * 4; // Approximate monthly target
+            const saturdayTarget = provider.saturdaysPerMonth;
+            
+            let status = 'balanced';
+            if (stats.assignedDays > targetDays + 2) {
+                status = 'overworked';
+                analysis.overworkedProviders++;
+            } else if (stats.assignedDays < targetDays - 2) {
+                status = 'underworked';
+            }
+            
+            analysis.providerWorkload.push({
+                name: provider.name,
+                assignedDays: stats.assignedDays,
+                targetDays: targetDays,
+                saturdayCoverage: `${stats.assignedSaturdays}/${saturdayTarget}`,
+                status: status,
+                preferenceViolations: stats.preferenceViolations
+            });
+            
+            // Add workload issues
+            if (status === 'overworked') {
+                analysis.issues.push({
+                    type: 'overworked',
+                    severity: 'warning',
+                    message: `${provider.name} is overworked (${stats.assignedDays} days vs ${targetDays} target)`,
+                    provider: provider.name
+                });
+            }
+            
+            if (stats.preferenceViolations > 0) {
+                analysis.issues.push({
+                    type: 'preference',
+                    severity: 'warning',
+                    message: `${provider.name} has ${stats.preferenceViolations} preference violations`,
+                    provider: provider.name
+                });
+            }
+        });
+        
+        return analysis;
+    }
+
+    analyzeDayIssues(dayData, dayNum, month, year, location) {
+        const issues = [];
+        
+        // Check for understaffing
+        const totalShifts = (dayData.shifts.open?.length || 0) + 
+                           (dayData.shifts.mid?.length || 0) + 
+                           (dayData.shifts.close?.length || 0);
+        
+        if (!dayData.isHoliday && dayData.dayOfWeek !== 0) {
+            // Only flag as understaffed if non-Saturday days have only 1 provider
+            if (dayData.dayOfWeek !== 6 && totalShifts === 1) {
+                issues.push({
+                    severity: 'error',
+                    message: `Understaffed (only 1 provider)`
+                });
+            }
+        }
+        
+        // Check for PTO conflicts
+        const assignedProviders = [
+            ...(dayData.shifts.open || []),
+            ...(dayData.shifts.mid || []),
+            ...(dayData.shifts.close || [])
+        ];
+        
+        assignedProviders.forEach(providerName => {
+            const provider = this.providers.find(p => p.name === providerName);
+            if (provider && provider.ptoDates.some(ptoDate => {
+                const ptoDateNormalized = new Date(ptoDate.getFullYear(), ptoDate.getMonth(), ptoDate.getDate());
+                const scheduleDateNormalized = new Date(year, month, dayNum);
+                return ptoDateNormalized.getTime() === scheduleDateNormalized.getTime();
+            })) {
+                issues.push({
+                    severity: 'error',
+                    message: `${providerName} on PTO`
+                });
+            }
+        });
+        
+        return issues;
+    }
+
+    getIssueIcon(issueType) {
+        const icons = {
+            'understaffing': '⚠️',
+            'overworked': '😰',
+            'preference': '😕',
+            'pto': '🏖️',
+            'saturday': '📅'
+        };
+        return icons[issueType] || '⚠️';
     }
 }
 
