@@ -1058,6 +1058,77 @@ main {
     opacity: 0.3;
 }
 
+/* Drag & Drop Styles */
+.shift {
+    transition: all 0.2s ease;
+    user-select: none;
+}
+
+.shift.dragging {
+    opacity: 0.5;
+    transform: scale(0.95);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+}
+
+.shift-cell.drag-over {
+    background-color: #e3f2fd !important;
+    border: 2px dashed #2196f3 !important;
+    border-radius: 4px;
+    animation: dragOverPulse 0.5s ease-in-out;
+}
+
+@keyframes dragOverPulse {
+    0% { transform: scale(1); }
+    50% { transform: scale(1.02); }
+    100% { transform: scale(1); }
+}
+
+/* Enhanced shift styling for drag operations */
+.shift:not(.off) {
+    cursor: grab;
+    position: relative;
+}
+
+.shift:not(.off):active {
+    cursor: grabbing;
+}
+
+.shift:not(.off):hover {
+    transform: scale(1.05);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+    z-index: 10;
+}
+
+/* Drop zone indicators */
+.shift-cell.drag-over::before {
+    content: "Drop here";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background: rgba(33, 150, 243, 0.9);
+    color: white;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 0.8rem;
+    font-weight: bold;
+    z-index: 1000;
+    pointer-events: none;
+}
+
+/* Swap indicator */
+.shift-cell.drag-over .shift:not(.off) {
+    background-color: #fff3cd;
+    border: 2px solid #ffc107;
+    border-radius: 4px;
+    animation: swapIndicator 0.5s ease-in-out infinite alternate;
+}
+
+@keyframes swapIndicator {
+    0% { background-color: #fff3cd; }
+    100% { background-color: #ffeaa7; }
+}
+
 /* Responsive interactive features */
 @media (max-width: 768px) {
     .filter-buttons {
@@ -1090,5 +1161,19 @@ main {
     .btn-cancel-shift {
         padding: 3px 6px;
         font-size: 0.7rem;
+    }
+    
+    /* Mobile drag & drop adjustments */
+    .shift:not(.off) {
+        cursor: pointer; /* Fallback for touch devices */
+    }
+    
+    .shift-cell.drag-over::before {
+        font-size: 0.7rem;
+        padding: 2px 6px;
+    }
+    
+    .shift:not(.off):hover {
+        transform: scale(1.02); /* Reduced scale for mobile */
     }
 }

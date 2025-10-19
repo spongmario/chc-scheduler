@@ -2261,6 +2261,9 @@ class CHCScheduler {
                 this.startShiftEdit(cell);
             });
         });
+        
+        // Add drag & drop functionality
+        this.addDragAndDropHandlers();
     }
 
     startShiftEdit(cell) {
@@ -2479,6 +2482,335 @@ class CHCScheduler {
             
             // Re-add interactive features to the new dashboard
             this.addInteractiveFeatures();
+        }
+        
+        // Re-add drag and drop handlers after any updates
+        this.addDragAndDropHandlers();
+    }
+
+    addDragAndDropHandlers() {
+        // Remove existing handlers first to prevent duplicates
+        this.removeDragAndDropHandlers();
+        
+        // Add drag handlers to all shift spans
+        document.querySelectorAll('.shift').forEach(shift => {
+            if (!shift.classList.contains('off') && !shift.hasAttribute('data-drag-handler')) {
+                shift.draggable = true;
+                shift.setAttribute('data-drag-handler', 'true');
+                shift.addEventListener('dragstart', (e) => this.handleDragStart(e));
+                shift.addEventListener('dragend', (e) => this.handleDragEnd(e));
+            }
+        });
+
+        // Add drop handlers to all shift cells
+        document.querySelectorAll('.shift-cell').forEach(cell => {
+            if (!cell.hasAttribute('data-drop-handler')) {
+                cell.setAttribute('data-drop-handler', 'true');
+                cell.addEventListener('dragover', (e) => this.handleDragOver(e));
+                cell.addEventListener('drop', (e) => this.handleDrop(e));
+                cell.addEventListener('dragenter', (e) => this.handleDragEnter(e));
+                cell.addEventListener('dragleave', (e) => this.handleDragLeave(e));
+            }
+        });
+    }
+
+    removeDragAndDropHandlers() {
+        // Remove drag handlers
+        document.querySelectorAll('.shift[data-drag-handler]').forEach(shift => {
+            shift.removeAttribute('data-drag-handler');
+            shift.draggable = false;
+        });
+
+        // Remove drop handlers
+        document.querySelectorAll('.shift-cell[data-drop-handler]').forEach(cell => {
+            cell.removeAttribute('data-drop-handler');
+        });
+    }
+
+    handleDragStart(e) {
+        const shift = e.target;
+        const provider = shift.getAttribute('data-provider');
+        const day = shift.closest('.shift-cell').dataset.day;
+        const shiftType = shift.closest('.shift-cell').dataset.shift;
+        const location = shift.closest('.shift-cell').dataset.location;
+        
+        // Store drag data
+        e.dataTransfer.setData('text/plain', JSON.stringify({
+            provider: provider,
+            sourceDay: day,
+            sourceShift: shiftType,
+            sourceLocation: location,
+            sourceElement: shift.outerHTML
+        }));
+        
+        // Set drag image
+        const dragImage = shift.cloneNode(true);
+        dragImage.style.opacity = '0.8';
+        dragImage.style.transform = 'rotate(5deg)';
+        dragImage.style.border = '2px solid #2196f3';
+        dragImage.style.borderRadius = '4px';
+        dragImage.style.padding = '4px';
+        dragImage.style.background = 'white';
+        dragImage.style.boxShadow = '0 4px 12px rgba(0,0,0,0.3)';
+        document.body.appendChild(dragImage);
+        e.dataTransfer.setDragImage(dragImage, 0, 0);
+        
+        // Remove drag image after a short delay
+        setTimeout(() => {
+            if (document.body.contains(dragImage)) {
+                document.body.removeChild(dragImage);
+            }
+        }, 0);
+        
+        // Add visual feedback
+        shift.classList.add('dragging');
+    }
+
+    handleDragEnd(e) {
+        // Remove visual feedback
+        document.querySelectorAll('.dragging').forEach(el => el.classList.remove('dragging'));
+        document.querySelectorAll('.drag-over').forEach(el => el.classList.remove('drag-over'));
+    }
+
+    handleDragOver(e) {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+    }
+
+    handleDragEnter(e) {
+        e.preventDefault();
+        const cell = e.currentTarget;
+        if (!cell.classList.contains('drag-over')) {
+            cell.classList.add('drag-over');
+        }
+    }
+
+    handleDragLeave(e) {
+        const cell = e.currentTarget;
+        // Only remove drag-over if we're actually leaving the cell
+        if (!cell.contains(e.relatedTarget)) {
+            cell.classList.remove('drag-over');
+        }
+    }
+
+    handleDrop(e) {
+        e.preventDefault();
+        const targetCell = e.currentTarget;
+        targetCell.classList.remove('drag-over');
+        
+        try {
+            const dragData = JSON.parse(e.dataTransfer.getData('text/plain'));
+            const sourceDay = parseInt(dragData.sourceDay);
+            const sourceShift = dragData.sourceShift;
+            const sourceLocation = dragData.sourceLocation;
+            const provider = dragData.provider;
+            
+            const targetDay = parseInt(targetCell.dataset.day);
+            const targetShift = targetCell.dataset.shift;
+            const targetLocation = targetCell.dataset.location;
+            
+            // Check if we're dropping on the same shift
+            if (sourceDay === targetDay && sourceShift === targetShift && sourceLocation === targetLocation) {
+                return; // No change needed
+            }
+            
+            // Check if we're dropping on another provider (swap)
+            const targetShiftElement = targetCell.querySelector('.shift:not(.off)');
+            if (targetShiftElement && targetShiftElement.getAttribute('data-provider')) {
+                this.swapProviders(dragData, targetShiftElement, targetCell);
+            } else {
+                // Move provider to new shift
+                this.moveProvider(dragData, targetCell);
+            }
+            
+        } catch (error) {
+            console.error('Error handling drop:', error);
+        }
+    }
+
+    swapProviders(dragData, targetShiftElement, targetCell) {
+        const sourceProvider = dragData.provider;
+        const targetProvider = targetShiftElement.getAttribute('data-provider');
+        
+        const sourceDay = parseInt(dragData.sourceDay);
+        const sourceShift = dragData.sourceShift;
+        const sourceLocation = dragData.sourceLocation;
+        
+        const targetDay = parseInt(targetCell.dataset.day);
+        const targetShift = targetCell.dataset.shift;
+        const targetLocation = targetCell.dataset.location;
+        
+        // Validate both moves
+        if (!this.validateProviderMove(sourceProvider, targetDay, targetShift, targetLocation, sourceShift) ||
+            !this.validateProviderMove(targetProvider, sourceDay, sourceShift, sourceLocation, targetShift)) {
+            return;
+        }
+        
+        // Perform the swap
+        this.performProviderSwap(
+            sourceProvider, sourceDay, sourceShift, sourceLocation,
+            targetProvider, targetDay, targetShift, targetLocation
+        );
+        
+        // Update dashboard
+        this.updateDashboard();
+    }
+
+    moveProvider(dragData, targetCell) {
+        const provider = dragData.provider;
+        const targetDay = parseInt(targetCell.dataset.day);
+        const targetShift = targetCell.dataset.shift;
+        const targetLocation = targetCell.dataset.location;
+        const sourceDay = parseInt(dragData.sourceDay);
+        const sourceShift = dragData.sourceShift;
+        const sourceLocation = dragData.sourceLocation;
+        
+        // Validate the move
+        if (!this.validateProviderMove(provider, targetDay, targetShift, targetLocation, sourceShift)) {
+            return;
+        }
+        
+        console.log(`Moving ${provider} from ${sourceLocation} day ${sourceDay} ${sourceShift} to ${targetLocation} day ${targetDay} ${targetShift}`);
+        
+        // Add to target (this will automatically remove from all other shifts on the same day)
+        this.addProviderToShift(targetDay, targetShift, targetLocation, provider);
+        
+        // Update displays for both source and target
+        const sourceCell = document.querySelector(`[data-day="${sourceDay}"][data-shift="${sourceShift}"][data-location="${sourceLocation}"]`);
+        if (sourceCell) {
+            this.updateShiftCellDisplay(
+                sourceCell,
+                this.schedule[sourceLocation][sourceDay].shifts[sourceShift],
+                sourceShift,
+                sourceDay
+            );
+        }
+        
+        this.updateShiftCellDisplay(targetCell, this.schedule[targetLocation][targetDay].shifts[targetShift], targetShift, targetDay);
+        
+        // Update dashboard
+        this.updateDashboard();
+    }
+
+    validateProviderMove(provider, day, shiftType, location, sourceShiftType = null) {
+        const year = parseInt(this.selectedMonth.split('-')[0]);
+        const month = parseInt(this.selectedMonth.split('-')[1]) - 1;
+        
+        console.log(`Validating move: ${provider} to ${shiftType} shift on day ${day} (source: ${sourceShiftType})`);
+        
+        // Check if provider is on PTO
+        const providerObj = this.providers.find(p => p.name === provider);
+        if (providerObj) {
+            const isOnPTO = providerObj.ptoDates.some(ptoDate => {
+                const ptoDateNormalized = new Date(ptoDate.getFullYear(), ptoDate.getMonth(), ptoDate.getDate());
+                const scheduleDateNormalized = new Date(year, month, day);
+                return ptoDateNormalized.getTime() === scheduleDateNormalized.getTime();
+            });
+            
+            if (isOnPTO) {
+                alert(`Cannot move ${provider} to ${shiftType} shift on day ${day} - they are on PTO.`);
+                return false;
+            }
+        }
+        
+        // Check if provider is already assigned to another shift that day
+        const dayData = this.schedule[location][day];
+        console.log(`Day data for ${day}:`, dayData);
+        
+        // Count how many shifts the provider is currently assigned to on this day
+        let assignedShifts = 0;
+        let currentShiftTypes = [];
+        
+        for (const [otherShiftType, otherProviders] of Object.entries(dayData.shifts)) {
+            if (Array.isArray(otherProviders) && otherProviders.includes(provider)) {
+                assignedShifts++;
+                currentShiftTypes.push(otherShiftType);
+                console.log(`Provider ${provider} found in ${otherShiftType} shift`);
+            }
+        }
+        
+        // If provider is in more than one shift, that's a problem
+        if (assignedShifts > 1) {
+            console.log(`Provider ${provider} is in multiple shifts: ${currentShiftTypes.join(', ')}`);
+            alert(`Cannot move ${provider} - they are currently assigned to multiple shifts: ${currentShiftTypes.join(', ')}`);
+            return false;
+        }
+        
+        // If provider is in exactly one shift and it's not the target shift, check if it's the source
+        if (assignedShifts === 1) {
+            const currentShift = currentShiftTypes[0];
+            if (currentShift === shiftType) {
+                console.log(`Provider already in target shift, allowing`);
+                return true;
+            }
+            if (sourceShiftType && currentShift === sourceShiftType) {
+                console.log(`Provider in source shift, allowing move`);
+                return true;
+            }
+            console.log(`Blocking move - provider in ${currentShift} shift`);
+            alert(`Cannot move ${provider} to ${shiftType} shift - they are already assigned to ${currentShift} shift.`);
+            return false;
+        }
+        
+        console.log(`Validation passed for ${provider}`);
+        return true;
+    }
+
+    performProviderSwap(sourceProvider, sourceDay, sourceShift, sourceLocation, targetProvider, targetDay, targetShift, targetLocation) {
+        // Remove both providers from their current shifts
+        this.removeProviderFromShift(sourceDay, sourceShift, sourceLocation, sourceProvider);
+        this.removeProviderFromShift(targetDay, targetShift, targetLocation, targetProvider);
+        
+        // Add them to each other's shifts
+        this.addProviderToShift(targetDay, targetShift, targetLocation, sourceProvider);
+        this.addProviderToShift(sourceDay, sourceShift, sourceLocation, targetProvider);
+        
+        // Update displays
+        const sourceCell = document.querySelector(`[data-day="${sourceDay}"][data-shift="${sourceShift}"][data-location="${sourceLocation}"]`);
+        const targetCell = document.querySelector(`[data-day="${targetDay}"][data-shift="${targetShift}"][data-location="${targetLocation}"]`);
+        
+        this.updateShiftCellDisplay(sourceCell, this.schedule[sourceLocation][sourceDay].shifts[sourceShift], sourceShift, sourceDay);
+        this.updateShiftCellDisplay(targetCell, this.schedule[targetLocation][targetDay].shifts[targetShift], targetShift, targetDay);
+    }
+
+    removeProviderFromShift(day, shiftType, location, provider) {
+        const shifts = this.schedule[location][day].shifts[shiftType];
+        if (Array.isArray(shifts)) {
+            const index = shifts.indexOf(provider);
+            if (index > -1) {
+                shifts.splice(index, 1);
+                console.log(`Removed ${provider} from ${location} day ${day} ${shiftType}. Remaining:`, shifts);
+            } else {
+                console.log(`Provider ${provider} not found in ${location} day ${day} ${shiftType}`);
+            }
+        } else {
+            console.log(`No shifts array found for ${location} day ${day} ${shiftType}`);
+        }
+    }
+
+    addProviderToShift(day, shiftType, location, provider) {
+        if (!this.schedule[location][day].shifts[shiftType]) {
+            this.schedule[location][day].shifts[shiftType] = [];
+        }
+        
+        // Remove provider from all other shifts on the same day first
+        this.removeProviderFromAllShiftsOnDay(day, location, provider);
+        
+        // Then add to the target shift
+        this.schedule[location][day].shifts[shiftType].push(provider);
+        console.log(`Added ${provider} to ${location} day ${day} ${shiftType}. Now has:`, this.schedule[location][day].shifts[shiftType]);
+    }
+
+    removeProviderFromAllShiftsOnDay(day, location, provider) {
+        const dayData = this.schedule[location][day];
+        for (const [shiftType, providers] of Object.entries(dayData.shifts)) {
+            if (Array.isArray(providers)) {
+                const index = providers.indexOf(provider);
+                if (index > -1) {
+                    providers.splice(index, 1);
+                    console.log(`Removed ${provider} from ${location} day ${day} ${shiftType}`);
+                }
+            }
         }
     }
 }
