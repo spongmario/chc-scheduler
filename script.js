@@ -75,7 +75,7 @@ class CHCScheduler {
         }
 
         const headers = data[0].map(h => h ? h.toString().toLowerCase().trim() : '');
-        const expectedHeaders = ['name', 'days per week', 'saturdays per month', 'preferred weekday off', 'shift preferance', 'pto date', 'location'];
+        const expectedHeaders = ['name', 'days per week', 'saturdays per month', 'preferred weekday off', 'shift preference', 'pto date', 'location'];
         
         // Find column indices
         const columnMap = {};
@@ -107,7 +107,7 @@ class CHCScheduler {
                 daysPerWeek: parseInt(row[columnMap['days per week']]) || 0,
                 saturdaysPerMonth: parseInt(row[columnMap['saturdays per month']]) || 0,
                 preferredDaysOff: this.parseDayOfWeek(row[columnMap['preferred weekday off']]),
-                shiftPreferences: this.parseShiftPreference(row[columnMap['shift preferance']]),
+                shiftPreferences: this.parseShiftPreference(row[columnMap['shift preference']]),
                 ptoDates: this.parsePTODates(row[columnMap['pto date']]),
                 location: location
             };
