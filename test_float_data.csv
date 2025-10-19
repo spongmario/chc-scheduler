@@ -1,0 +1,8 @@
+Name,Days per Week,Saturdays per Month,Preferred Weekday Off,Shift Preference,PTO Date,Location
+John Smith,4,2,Monday,Friday,open,mid,12/25/2024,01/01/2025,Central
+Sarah Johnson,5,1,Monday,Tuesday,mid,open,12/24/2024,Central
+Mike Davis,3,3,Wednesday,Thursday,close,mid,open,,Central
+Lisa Wilson,4,2,Tuesday,Wednesday,open,close,12/31/2024,Edmonds
+Dr. Robert Chen,5,2,Thursday,Friday,mid,open,close,,Edmonds
+Dr. Alex Float,4,2,Tuesday,Wednesday,mid,open,close,,Float
+Nurse Float Sally,3,2,Saturday,Sunday,close,mid,01/15/2025,Float

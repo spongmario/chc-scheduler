@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>New Float Provider Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .test-section { margin: 20px 0; padding: 15px; border: 1px solid #ccc; }
+        .success { color: green; }
+        .error { color: red; }
+        pre { background: #f5f5f5; padding: 10px; overflow-x: auto; }
+        .schedule-display { margin: 10px 0; }
+        .location { margin: 10px 0; padding: 10px; border: 1px solid #ddd; }
+        .day { margin: 5px 0; padding: 5px; background: #f9f9f9; }
+    </style>
+</head>
+<body>
+    <h1>New Float Provider Logic Test</h1>
+    
+    <div class="test-section">
+        <h2>Test Data</h2>
+        <p>Testing with float providers that can work at both locations:</p>
+        <pre>
+Name,Days per Week,Saturdays per Month,Preferred Weekday Off,Shift Preference,PTO Date,Location
+John Smith,4,2,Monday,Friday,open,mid,12/25/2024,01/01/2025,Central
+Sarah Johnson,5,1,Monday,Tuesday,mid,open,12/24/2024,Central
+Mike Davis,3,3,Wednesday,Thursday,close,mid,open,,Central
+Lisa Wilson,4,2,Tuesday,Wednesday,open,close,12/31/2024,Edmonds
+Dr. Robert Chen,5,2,Thursday,Friday,mid,open,close,,Edmonds
+Dr. Alex Float,4,2,Tuesday,Wednesday,mid,open,close,,Float
+Nurse Float Sally,3,2,Saturday,Sunday,close,mid,01/15/2025,Float
+        </pre>
+    </div>
+
+    <div class="test-section">
+        <h2>Expected Behavior</h2>
+        <ul>
+            <li>Float providers should be able to work at either Central or Edmonds on any given day</li>
+            <li>Float providers should not be double-booked (only one shift per day)</li>
+            <li>Float providers should be used when regular location providers are unavailable</li>
+            <li>Float providers should respect their preferences (days off, shift preferences, etc.)</li>
+            <li>Float providers should be distributed between locations based on need</li>
+        </ul>
+    </div>
+
+    <div class="test-section">
+        <h2>Test Results</h2>
+        <p id="test-results">Click "Run Test" to test the new float provider functionality.</p>
+        <button onclick="runNewFloatTest()">Run Test</button>
+        <div id="schedule-results"></div>
+    </div>
+
+    <script src="script.js"></script>
+    <script>
+        function runNewFloatTest() {
+            const resultsDiv = document.getElementById('test-results');
+            const scheduleDiv = document.getElementById('schedule-results');
+            resultsDiv.innerHTML = '<p>Testing new float provider functionality...</p>';
+            scheduleDiv.innerHTML = '';
+            
+            // Simulate the test data
+            const testData = [
+                ['Name', 'Days per Week', 'Saturdays per Month', 'Preferred Weekday Off', 'Shift Preference', 'PTO Date', 'Location'],
+                ['John Smith', '4', '2', 'Monday,Friday', 'open,mid', '12/25/2024,01/01/2025', 'Central'],
+                ['Sarah Johnson', '5', '1', 'Monday,Tuesday', 'mid,open', '12/24/2024', 'Central'],
+                ['Mike Davis', '3', '3', 'Wednesday,Thursday', 'close,mid,open', '', 'Central'],
+                ['Lisa Wilson', '4', '2', 'Tuesday,Wednesday', 'open,close', '12/31/2024', 'Edmonds'],
+                ['Dr. Robert Chen', '5', '2', 'Thursday,Friday', 'mid,open,close', '', 'Edmonds'],
+                ['Dr. Alex Float', '4', '2', 'Tuesday,Wednesday', 'mid,open,close', '', 'Float'],
+                ['Nurse Float Sally', '3', '2', 'Saturday,Sunday', 'close,mid', '01/15/2025', 'Float']
+            ];
+            
+            try {
+                // Test the new scheduling logic
+                const scheduler = new CHCScheduler();
+                scheduler.parseProviderData(testData);
+                
+                // Set a test month
+                scheduler.selectedMonth = '2024-12';
+                
+                // Generate schedule
+                scheduler.generateSchedule();
+                
+                let results = '<h3>Schedule Generation Results:</h3>';
+                results += '<p class="success">✅ Schedule generated successfully!</p>';
+                
+                // Display the schedule
+                let scheduleDisplay = '<h3>Generated Schedule:</h3>';
+                for (const location in scheduler.schedule) {
+                    scheduleDisplay += `<div class="location"><h4>${location} Location</h4>`;
+                    for (const day in scheduler.schedule[location]) {
+                        const dayData = scheduler.schedule[location][day];
+                        if (dayData.isHoliday) {
+                            scheduleDisplay += `<div class="day">Day ${day}: ${dayData.holidayName} (Holiday)</div>`;
+                        } else {
+                            scheduleDisplay += `<div class="day">Day ${day}: `;
+                            if (dayData.shifts.open.length > 0) scheduleDisplay += `Open: ${dayData.shifts.open.join(', ')} `;
+                            if (dayData.shifts.mid.length > 0) scheduleDisplay += `Mid: ${dayData.shifts.mid.join(', ')} `;
+                            if (dayData.shifts.close.length > 0) scheduleDisplay += `Close: ${dayData.shifts.close.join(', ')}`;
+                            scheduleDisplay += '</div>';
+                        }
+                    }
+                    scheduleDisplay += '</div>';
+                }
+                
+                resultsDiv.innerHTML = results;
+                scheduleDiv.innerHTML = scheduleDisplay;
+                
+            } catch (error) {
+                resultsDiv.innerHTML = `<p class="error">Error: ${error.message}</p>`;
+                console.error('Test error:', error);
+            }
+        }
+    </script>
+</body>
+</html>

@@ -29,6 +29,7 @@ generateSchedule() {
     // Calculate days in month
     // Initialize day objects with shift slots
     // Identify weekends vs weekdays
+    // Handle float providers distribution
 }
 ```
 
@@ -36,6 +37,7 @@ generateSchedule() {
 1. **Month Analysis**: Determines number of days and day-of-week patterns
 2. **Shift Structure**: Creates slots for open, mid, close shifts
 3. **Weekend Identification**: Marks Saturday/Sunday for special handling
+4. **Float Provider Distribution**: Distributes float providers between Central and Edmonds locations
 
 ### Phase 3: Workload Distribution Planning
 ```javascript
@@ -133,17 +135,41 @@ randomFactor = Math.random() * 10
 - **Range**: 0-10 points
 - **Effect**: Prevents identical schedules on regeneration
 
+## Float Provider Handling
+
+### Float Provider Assignment Strategy
+Float providers are handled dynamically during the scheduling process, allowing them to work at either Central or Edmonds locations as needed:
+
+```javascript
+// Float providers are considered for any location when regular providers are unavailable
+if (!provider) {
+    const floatProviders = allProviders.filter(p => p.isFloat && !p.currentShifts.some(s => s.day === day));
+    provider = this.selectProviderForShiftWithFloats(floatProviders, dayData, shiftType, isSaturday, location);
+}
+```
+
+### Float Provider Logic
+1. **Dynamic Assignment**: Float providers are considered for any location when regular providers are unavailable
+2. **Balanced Distribution**: The system tracks float assignments to ensure balanced coverage between locations
+3. **Priority System**: Regular location providers are prioritized, with float providers used as backup
+4. **Same Scoring**: Float providers use the same scoring system as regular providers for fair assignment
+5. **No Double-Booking**: Float providers can only work one shift per day, regardless of location
+
 ## Constraint Handling
 
 ### Hard Constraints (Must Be Respected)
 1. **PTO Dates**: Never schedule on provider PTO
 2. **Double Booking**: Never schedule same provider twice in one day
 3. **Saturday Limits**: Respect maximum Saturday assignments per month
+4. **Days Per Week**: Respect maximum days per week for each provider
+5. **Float Provider Single Assignment**: Float providers can only work one shift per day
 
 ### Soft Constraints (Preferably Respected)
 1. **Preferred Days Off**: Try to avoid scheduling on preferred days
 2. **Shift Preferences**: Try to match preferred shift types
 3. **Workload Balance**: Distribute shifts fairly among providers
+4. **Float Provider Balance**: Use float providers to balance workload between locations
+5. **Location Priority**: Regular location providers are prioritized over float providers
 
 ### Constraint Resolution Strategy
 ```javascript

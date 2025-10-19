@@ -93,6 +93,15 @@ class CHCScheduler {
             const row = data[i];
             if (row.length === 0 || !row[columnMap['name']]) continue;
 
+            const location = row[columnMap['location']] ? row[columnMap['location']].toString().trim() : 'Central';
+            
+            // Validate location
+            const validLocations = ['Central', 'Edmonds', 'Float'];
+            if (!validLocations.includes(location)) {
+                this.showError(`Invalid location "${location}" for provider "${row[columnMap['name']]}". Must be Central, Edmonds, or Float.`);
+                continue;
+            }
+
             const provider = {
                 name: row[columnMap['name']].toString().trim(),
                 daysPerWeek: parseInt(row[columnMap['days per week']]) || 0,
@@ -100,7 +109,7 @@ class CHCScheduler {
                 preferredDaysOff: this.parseDayOfWeek(row[columnMap['preferred weekday off']]),
                 shiftPreferences: this.parseShiftPreference(row[columnMap['shift preferance']]),
                 ptoDates: this.parsePTODates(row[columnMap['pto date']]),
-                location: row[columnMap['location']] ? row[columnMap['location']].toString().trim() : 'Central'
+                location: location
             };
 
             if (provider.name && provider.daysPerWeek > 0) {
@@ -317,6 +326,7 @@ class CHCScheduler {
         // Initialize schedule structure for each location
         const schedule = {};
         
+        // Initialize schedule structure for each location
         for (const location in providersByLocation) {
             schedule[location] = {};
             
@@ -339,38 +349,100 @@ class CHCScheduler {
                     holidayName: holidayInfo.name
                 };
             }
-
-            // Calculate total shifts needed for this location
-            const totalWeekdays = this.getWeekdaysInMonth(year, month);
-            const totalSaturdays = this.getSaturdaysInMonth(year, month);
-            const totalHolidays = this.getHolidaysInMonth(year, month);
-            // Holidays count as paid shifts for ALL providers at this location
-            // Saturdays now only need 1 shift (mid) instead of 2
-            const totalShifts = totalWeekdays * 3 + totalSaturdays * 1 + (totalHolidays * providersByLocation[location].length);
-
-            // Distribute shifts among providers for this location
-            this.distributeShiftsForLocation(schedule[location], totalShifts, providersByLocation[location]);
         }
+
+        // Distribute shifts with float provider support
+        this.distributeShiftsWithFloatSupport(schedule, providersByLocation, year, month);
 
         this.schedule = schedule;
     }
 
     separateProvidersByLocation() {
         const providersByLocation = {};
+        const floatProviders = [];
         
+        // Separate regular providers by location and collect float providers
         for (const provider of this.providers) {
-            const location = provider.location || 'Central';
-            if (!providersByLocation[location]) {
-                providersByLocation[location] = [];
+            if (provider.location === 'Float') {
+                floatProviders.push(provider);
+            } else {
+                const location = provider.location || 'Central';
+                if (!providersByLocation[location]) {
+                    providersByLocation[location] = [];
+                }
+                providersByLocation[location].push(provider);
             }
-            providersByLocation[location].push(provider);
         }
+        
+        // Store float providers separately for dynamic assignment
+        this.floatProviders = floatProviders;
         
         return providersByLocation;
     }
 
-    distributeShiftsForLocation(schedule, totalShifts, locationProviders) {
-        // Create a working copy of providers with current assignments
+    distributeShiftsWithFloatSupport(schedule, providersByLocation, year, month) {
+        const daysInMonth = new Date(year, month + 1, 0).getDate();
+        
+        // Create working copies of all providers
+        const allProviders = [];
+        const locationProviders = {};
+        
+        // Initialize working providers for each location
+        for (const location in providersByLocation) {
+            locationProviders[location] = providersByLocation[location].map(p => ({
+                ...p,
+                assignedDays: 0,
+                assignedSaturdays: 0,
+                assignedHolidays: 0,
+                currentShifts: [],
+                location: location
+            }));
+            allProviders.push(...locationProviders[location]);
+        }
+        
+        // Add float providers to all locations (they can work anywhere)
+        if (this.floatProviders && this.floatProviders.length > 0) {
+            const floatProvidersCopy = this.floatProviders.map(p => ({
+                ...p,
+                assignedDays: 0,
+                assignedSaturdays: 0,
+                assignedHolidays: 0,
+                currentShifts: [],
+                location: 'Float',
+                isFloat: true
+            }));
+            allProviders.push(...floatProvidersCopy);
+        }
+        
+        // First, handle holidays for all providers
+        for (const location in schedule) {
+            for (const day in schedule[location]) {
+                const dayData = schedule[location][day];
+                if (dayData.isHoliday) {
+                    // All providers at this location get holiday credit
+                    locationProviders[location].forEach(provider => {
+                        provider.assignedDays++;
+                        provider.assignedHolidays++;
+                        provider.currentShifts.push({ day: parseInt(day), shiftType: 'holiday' });
+                    });
+                    dayData.shifts.holiday = [dayData.holidayName];
+                }
+            }
+        }
+        
+        // Now handle regular shifts with float provider logic
+        this.distributeRegularShiftsWithFloats(schedule, locationProviders, allProviders, daysInMonth);
+    }
+
+    distributeRegularShiftsWithFloats(schedule, locationProviders, allProviders, daysInMonth) {
+        // Use the original Saturday-first approach but with float provider support
+        for (const location in schedule) {
+            this.distributeShiftsWithRankingForLocationWithFloats(schedule[location], locationProviders[location], allProviders);
+        }
+    }
+
+    distributeShiftsWithRankingForLocationWithFloats(schedule, locationProviders, allProviders) {
+        // Create working providers for this location
         const workingProviders = locationProviders.map(p => ({
             ...p,
             assignedDays: 0,
@@ -379,26 +451,181 @@ class CHCScheduler {
             currentShifts: []
         }));
 
-        // First, give ALL providers credit for holidays
-        for (const day in schedule) {
-            const dayData = schedule[day];
-            const isHoliday = dayData.isHoliday;
+        // Add float providers to the working providers list
+        const floatProviders = allProviders.filter(p => p.isFloat);
+        const floatProvidersCopy = floatProviders.map(p => ({
+            ...p,
+            assignedDays: 0,
+            assignedSaturdays: 0,
+            assignedHolidays: 0,
+            currentShifts: []
+        }));
+        workingProviders.push(...floatProvidersCopy);
 
-            if (isHoliday) {
-                // ALL providers get credit for holidays - no actual work but counts as a shift
-                workingProviders.forEach(provider => {
-                    provider.assignedDays++;
-                    provider.assignedHolidays++;
-                    provider.currentShifts.push({ day: parseInt(day), shiftType: 'holiday' });
-                });
-                // Mark this as a holiday for display purposes
-                dayData.shifts.holiday = [dayData.holidayName];
-            }
-        }
-
-        // Then distribute regular work shifts with day ranking consideration
+        // Use the original Saturday-first logic
         this.distributeShiftsWithRankingForLocation(schedule, workingProviders);
     }
+
+    selectProviderForShiftWithFloats(providers, dayData, shiftType, isSaturday, location) {
+        // Special handling for Saturday shifts
+        if (isSaturday) {
+            return this.selectSaturdayProviderWithFloats(providers, dayData, shiftType, location);
+        }
+        
+        // Regular weekday logic
+        const availableProviders = providers.filter(p => {
+            // Check if already assigned today
+            const assignedToday = p.currentShifts.some(s => s.day === dayData.date.getDate());
+            if (assignedToday) return false;
+
+            // Check PTO
+            const isOnPTO = p.ptoDates.some(ptoDate => {
+                const ptoDateNormalized = new Date(ptoDate.getFullYear(), ptoDate.getMonth(), ptoDate.getDate());
+                const scheduleDateNormalized = new Date(dayData.date.getFullYear(), dayData.date.getMonth(), dayData.date.getDate());
+                return ptoDateNormalized.getTime() === scheduleDateNormalized.getTime();
+            });
+            if (isOnPTO) return false;
+
+            // Check preferred days off
+            if (p.preferredDaysOff.includes(dayData.dayOfWeek)) return false;
+
+            // Check days per week limit
+            const daysWorkedThisWeek = this.getDaysWorkedThisWeek(p, dayData.date);
+            if (daysWorkedThisWeek >= p.daysPerWeek) return false;
+
+            return true;
+        });
+
+        if (availableProviders.length === 0) return null;
+
+        // Score and select best provider
+        const scoredProviders = availableProviders.map(provider => {
+            let score = 0;
+            
+            // Base workload score (fewer assigned days = higher score)
+            score += (10 - provider.assignedDays) * 10;
+            
+            // Shift preference score
+            const prefIndex = provider.shiftPreferences.indexOf(shiftType);
+            if (prefIndex !== -1) {
+                score += (provider.shiftPreferences.length - prefIndex) * 20;
+            } else {
+                score += Math.random() * 5;
+            }
+            
+            // Random factor
+            score += Math.random() * 10;
+            
+            return { provider, score };
+        });
+
+        // Sort by score and return best provider
+        scoredProviders.sort((a, b) => b.score - a.score);
+        return scoredProviders[0].provider;
+    }
+
+    selectSaturdayProviderWithFloats(providers, dayData, shiftType, location) {
+        // First, try to find providers who WANT Saturdays and haven't reached their limit
+        const saturdayWanters = providers.filter(p => {
+            const assignedToday = p.currentShifts.some(s => s.day === dayData.date.getDate());
+            const isOnPTO = p.ptoDates.some(ptoDate => {
+                const ptoDateNormalized = new Date(ptoDate.getFullYear(), ptoDate.getMonth(), ptoDate.getDate());
+                const scheduleDateNormalized = new Date(dayData.date.getFullYear(), dayData.date.getMonth(), dayData.date.getDate());
+                return ptoDateNormalized.getTime() === scheduleDateNormalized.getTime();
+            });
+            const isPreferredDayOff = p.preferredDaysOff.includes(dayData.dayOfWeek);
+            const daysWorkedThisWeek = this.getDaysWorkedThisWeek(p, dayData.date);
+            const saturdayLimitExceeded = p.assignedSaturdays >= p.saturdaysPerMonth;
+            
+            return !assignedToday && !isOnPTO && !isPreferredDayOff && 
+                   daysWorkedThisWeek < p.daysPerWeek && !saturdayLimitExceeded &&
+                   p.saturdaysPerMonth >= 2; // Only providers who WANT Saturdays
+        });
+        
+        let provider = null;
+        
+        if (saturdayWanters.length > 0) {
+            // Score and select from providers who WANT Saturdays
+            const scoredProviders = saturdayWanters.map(p => {
+                let score = 0;
+                const saturdaysNeeded = p.saturdaysPerMonth - p.assignedSaturdays;
+                score += saturdaysNeeded * 200; // Very high priority for Saturday wanters
+                
+                // Prefer shift preference match
+                const shiftPreferenceIndex = p.shiftPreferences.indexOf(shiftType);
+                if (shiftPreferenceIndex !== -1) {
+                    score += (p.shiftPreferences.length - shiftPreferenceIndex) * 20;
+                }
+                
+                return { provider: p, score };
+            });
+            
+            scoredProviders.sort((a, b) => b.score - a.score);
+            provider = scoredProviders[0].provider;
+        }
+        
+        // If no Saturday wanters available, try normal selection
+        if (!provider) {
+            const availableProviders = providers.filter(p => {
+                const assignedToday = p.currentShifts.some(s => s.day === dayData.date.getDate());
+                const isOnPTO = p.ptoDates.some(ptoDate => {
+                    const ptoDateNormalized = new Date(ptoDate.getFullYear(), ptoDate.getMonth(), ptoDate.getDate());
+                    const scheduleDateNormalized = new Date(dayData.date.getFullYear(), dayData.date.getMonth(), dayData.date.getDate());
+                    return ptoDateNormalized.getTime() === scheduleDateNormalized.getTime();
+                });
+                const isPreferredDayOff = p.preferredDaysOff.includes(dayData.dayOfWeek);
+                const daysWorkedThisWeek = this.getDaysWorkedThisWeek(p, dayData.date);
+                const saturdayLimitExceeded = p.assignedSaturdays >= p.saturdaysPerMonth;
+                
+                return !assignedToday && !isOnPTO && !isPreferredDayOff && 
+                       daysWorkedThisWeek < p.daysPerWeek && !saturdayLimitExceeded;
+            });
+            
+            if (availableProviders.length > 0) {
+                const scoredProviders = availableProviders.map(p => {
+                    let score = 0;
+                    score += (10 - p.assignedDays) * 10;
+                    
+                    const prefIndex = p.shiftPreferences.indexOf(shiftType);
+                    if (prefIndex !== -1) {
+                        score += (p.shiftPreferences.length - prefIndex) * 20;
+                    } else {
+                        score += Math.random() * 5;
+                    }
+                    
+                    if (p.assignedSaturdays < p.saturdaysPerMonth) {
+                        score += 30;
+                    }
+                    
+                    score += Math.random() * 10;
+                    return { provider: p, score };
+                });
+                
+                scoredProviders.sort((a, b) => b.score - a.score);
+                provider = scoredProviders[0].provider;
+            }
+        }
+        
+        // If still no provider, use emergency fallback
+        if (!provider) {
+            const emergencyProviders = providers.filter(p => {
+                const assignedToday = p.currentShifts.some(s => s.day === dayData.date.getDate());
+                const isOnPTO = p.ptoDates.some(ptoDate => {
+                    const ptoDateNormalized = new Date(ptoDate.getFullYear(), ptoDate.getMonth(), ptoDate.getDate());
+                    const scheduleDateNormalized = new Date(dayData.date.getFullYear(), dayData.date.getMonth(), dayData.date.getDate());
+                    return ptoDateNormalized.getTime() === scheduleDateNormalized.getTime();
+                });
+                return !assignedToday && !isOnPTO;
+            });
+            
+            if (emergencyProviders.length > 0) {
+                provider = emergencyProviders[Math.floor(Math.random() * emergencyProviders.length)];
+            }
+        }
+        
+        return provider;
+    }
+
 
     distributeShiftsWithRankingForLocation(schedule, workingProviders) {
         // NEW LOGIC: Prioritize Saturday assignments for providers who WANT to work Saturdays (2+)

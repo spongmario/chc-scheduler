@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Float Provider Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .test-section { margin: 20px 0; padding: 15px; border: 1px solid #ccc; }
+        .success { color: green; }
+        .error { color: red; }
+        pre { background: #f5f5f5; padding: 10px; overflow-x: auto; }
+    </style>
+</head>
+<body>
+    <h1>Float Provider Functionality Test</h1>
+    
+    <div class="test-section">
+        <h2>Test Data</h2>
+        <p>Testing with the following provider data:</p>
+        <pre>
+Name,Days per Week,Saturdays per Month,Preferred Weekday Off,Shift Preference,PTO Date,Location
+John Smith,4,2,Monday,Friday,open,mid,12/25/2024,01/01/2025,Central
+Sarah Johnson,5,1,Monday,Tuesday,mid,open,12/24/2024,Central
+Mike Davis,3,3,Wednesday,Thursday,close,mid,open,,Central
+Lisa Wilson,4,2,Tuesday,Wednesday,open,close,12/31/2024,Edmonds
+Dr. Robert Chen,5,2,Thursday,Friday,mid,open,close,,Edmonds
+Dr. Alex Float,4,2,Tuesday,Wednesday,mid,open,close,,Float
+Nurse Float Sally,3,2,Saturday,Sunday,close,mid,01/15/2025,Float
+        </pre>
+    </div>
+
+    <div class="test-section">
+        <h2>Expected Behavior</h2>
+        <ul>
+            <li>Central location should have: John Smith, Sarah Johnson, Mike Davis + 1 float provider</li>
+            <li>Edmonds location should have: Lisa Wilson, Dr. Robert Chen + 1 float provider</li>
+            <li>Float providers should be distributed proportionally based on regular provider ratios</li>
+            <li>Central has 3 regular providers, Edmonds has 2 regular providers</li>
+            <li>Expected distribution: Central gets 1 float (3/5 ratio), Edmonds gets 1 float (2/5 ratio)</li>
+        </ul>
+    </div>
+
+    <div class="test-section">
+        <h2>Test Results</h2>
+        <p id="test-results">Click "Run Test" to test the float provider functionality.</p>
+        <button onclick="runFloatTest()">Run Test</button>
+    </div>
+
+    <script>
+        // Copy the CHCScheduler class here for testing
+        // (This would normally be loaded from script.js)
+        
+        function runFloatTest() {
+            const resultsDiv = document.getElementById('test-results');
+            resultsDiv.innerHTML = '<p>Testing float provider functionality...</p>';
+            
+            // Simulate the test data
+            const testData = [
+                ['Name', 'Days per Week', 'Saturdays per Month', 'Preferred Weekday Off', 'Shift Preference', 'PTO Date', 'Location'],
+                ['John Smith', '4', '2', 'Monday,Friday', 'open,mid', '12/25/2024,01/01/2025', 'Central'],
+                ['Sarah Johnson', '5', '1', 'Monday,Tuesday', 'mid,open', '12/24/2024', 'Central'],
+                ['Mike Davis', '3', '3', 'Wednesday,Thursday', 'close,mid,open', '', 'Central'],
+                ['Lisa Wilson', '4', '2', 'Tuesday,Wednesday', 'open,close', '12/31/2024', 'Edmonds'],
+                ['Dr. Robert Chen', '5', '2', 'Thursday,Friday', 'mid,open,close', '', 'Edmonds'],
+                ['Dr. Alex Float', '4', '2', 'Tuesday,Wednesday', 'mid,open,close', '', 'Float'],
+                ['Nurse Float Sally', '3', '2', 'Saturday,Sunday', 'close,mid', '01/15/2025', 'Float']
+            ];
+            
+            try {
+                // Test the separation logic
+                const scheduler = new CHCScheduler();
+                scheduler.parseProviderData(testData);
+                
+                const providersByLocation = scheduler.separateProvidersByLocation();
+                
+                let results = '<h3>Provider Distribution Results:</h3>';
+                results += '<p><strong>Central Location:</strong></p>';
+                results += '<ul>';
+                providersByLocation.Central.forEach(provider => {
+                    results += `<li>${provider.name} (${provider.location})</li>`;
+                });
+                results += '</ul>';
+                
+                results += '<p><strong>Edmonds Location:</strong></p>';
+                results += '<ul>';
+                providersByLocation.Edmonds.forEach(provider => {
+                    results += `<li>${provider.name} (${provider.location})</li>`;
+                });
+                results += '</ul>';
+                
+                // Check if distribution is correct
+                const centralCount = providersByLocation.Central.length;
+                const edmondsCount = providersByLocation.Edmonds.length;
+                const centralFloatCount = providersByLocation.Central.filter(p => p.location === 'Float').length;
+                const edmondsFloatCount = providersByLocation.Edmonds.filter(p => p.location === 'Float').length;
+                
+                results += '<h3>Distribution Analysis:</h3>';
+                results += `<p>Central: ${centralCount} providers (${centralFloatCount} float)</p>`;
+                results += `<p>Edmonds: ${edmondsCount} providers (${edmondsFloatCount} float)</p>`;
+                
+                if (centralFloatCount === 1 && edmondsFloatCount === 1) {
+                    results += '<p class="success">✅ Float provider distribution is correct!</p>';
+                } else {
+                    results += '<p class="error">❌ Float provider distribution is incorrect!</p>';
+                }
+                
+                resultsDiv.innerHTML = results;
+                
+            } catch (error) {
+                resultsDiv.innerHTML = `<p class="error">Error: ${error.message}</p>`;
+            }
+        }
+    </script>
+    
+    <!-- Load the actual scheduler script -->
+    <script src="script.js"></script>
+</body>
+</html>

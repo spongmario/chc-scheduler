@@ -67,9 +67,9 @@ The Excel file must contain exactly 7 columns in the specified order:
 - **Type**: String
 - **Required**: Yes
 - **Format**: Location name
-- **Valid Values**: "Central", "Edmonds"
+- **Valid Values**: "Central", "Edmonds", "Float"
 - **Validation**: Must be one of the supported locations
-- **Example**: "Central" (for Central urgent care location)
+- **Example**: "Central" (for Central urgent care location), "Float" (can work at either location)
 
 ## Sample Data Format
 
@@ -81,6 +81,7 @@ Nurse Mike Davis,4,1,Wednesday,Thursday,close,mid,open,,Central
 Dr. Lisa Wilson,3,3,Tuesday,Wednesday,open,close,mid,01/15/2025,Edmonds
 Nurse Tom Brown,4,2,Sunday,Monday,mid,open,close,,Edmonds
 Dr. Maria Garcia,5,1,Thursday,Friday,close,open,mid,12/25/2024,Central
+Dr. Alex Float,4,2,Tuesday,Wednesday,mid,open,close,,Float
 ```
 
 ### Minimal Example
@@ -96,7 +97,7 @@ Sarah Johnson,5,1,Monday,mid,12/24/2024,Edmonds
 - **Name**: Must not be empty or whitespace
 - **Days per Week**: Must be a positive integer (1-7)
 - **Saturdays per Month**: Must be a non-negative integer (0-4)
-- **Location**: Must be "Central" or "Edmonds"
+- **Location**: Must be "Central", "Edmonds", or "Float"
 
 ### Optional Fields
 - **Preferred Weekday Off**: Can be empty or contain valid day names
