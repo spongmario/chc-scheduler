@@ -4,6 +4,7 @@ class CHCScheduler {
         this.schedule = {};
         this.selectedMonth = null;
         this.holidays = this.initializeHolidays();
+        this.dayRanking = this.initializeDayRanking();
         this.initializeEventListeners();
     }
 
@@ -19,6 +20,20 @@ class CHCScheduler {
             'Day After Thanksgiving': { month: 10, day: 23, fixed: false, weekday: 5 }, // Day after Thanksgiving
             'Christmas Eve': { month: 11, day: 24, fixed: true },
             'Christmas Day': { month: 11, day: 25, fixed: true }
+        };
+    }
+
+    initializeDayRanking() {
+        // Day ranking for 3-provider priority: Monday, Tuesday, Friday, Wednesday, Thursday
+        // Lower number = higher priority for 3 providers
+        return {
+            1: 1, // Monday - highest priority
+            2: 2, // Tuesday - second priority
+            5: 3, // Friday - third priority
+            3: 4, // Wednesday - fourth priority
+            4: 5, // Thursday - lowest priority
+            6: 6, // Saturday - not ideal for 3 providers
+            0: 7  // Sunday - clinic closed
         };
     }
 
@@ -396,18 +411,38 @@ class CHCScheduler {
             }
         }
 
-        // Then distribute regular work shifts
+        // Then distribute regular work shifts with day ranking consideration
+        this.distributeShiftsWithRanking(schedule, workingProviders);
+    }
+
+    distributeShiftsWithRanking(schedule, workingProviders) {
+        // Distribute shifts with day ranking consideration for 3-provider priority
+        // Days are ranked: Monday, Tuesday, Friday, Wednesday, Thursday (in order of preference for 3 providers)
+        
+        // First, get all non-holiday days and sort by ranking
+        const daysToSchedule = [];
         for (const day in schedule) {
             const dayData = schedule[day];
+            if (!dayData.isHoliday) {
+                daysToSchedule.push({
+                    day: parseInt(day),
+                    dayData: dayData,
+                    ranking: this.dayRanking[dayData.dayOfWeek] || 999
+                });
+            }
+        }
+        
+        // Sort by ranking (lower number = higher priority for 3 providers)
+        daysToSchedule.sort((a, b) => a.ranking - b.ranking);
+        
+        // Distribute shifts for each day in ranking order
+        for (const { day, dayData } of daysToSchedule) {
             const isSaturday = dayData.dayOfWeek === 6;
             const isThursday = dayData.dayOfWeek === 4;
-            const isHoliday = dayData.isHoliday;
-
-            if (isHoliday) continue; // Skip holidays (already handled)
 
             // Thursday: only mid shift, target 2 providers, allow 3 if needed, allow 1 if no other options
             if (isThursday) {
-                this.assignThursdayShifts(workingProviders, dayData, parseInt(day));
+                this.assignThursdayShifts(workingProviders, dayData, day);
             }
             // Saturday: only 1 provider assigned to "mid" shift
             else if (isSaturday) {
@@ -416,11 +451,11 @@ class CHCScheduler {
                     dayData.shifts.mid.push(provider.name);
                     provider.assignedDays++;
                     provider.assignedSaturdays++;
-                    provider.currentShifts.push({ day: parseInt(day), shiftType: 'mid' });
+                    provider.currentShifts.push({ day: day, shiftType: 'mid' });
                 }
             } else {
                 // Other weekdays: prioritize open and close shifts before mid shift
-                this.assignWeekdayShifts(workingProviders, dayData, parseInt(day));
+                this.assignWeekdayShifts(workingProviders, dayData, day);
             }
         }
     }
@@ -473,7 +508,10 @@ class CHCScheduler {
 
     assignWeekdayShifts(workingProviders, dayData, day) {
         // Weekday constraints: prioritize open and close shifts before mid shift
-        // This ensures proper clinic coverage for opening and closing times
+        // Maximum 3 providers per day, with day ranking for 3-provider priority
+        
+        const maxProviders = 3;
+        let assignedProviders = 0;
         
         // First, assign open shift (highest priority)
         const openProvider = this.selectProviderForShift(workingProviders, dayData, 'open', false);
@@ -481,6 +519,7 @@ class CHCScheduler {
             dayData.shifts.open.push(openProvider.name);
             openProvider.assignedDays++;
             openProvider.currentShifts.push({ day: day, shiftType: 'open' });
+            assignedProviders++;
         }
         
         // Second, assign close shift (second priority)
@@ -489,14 +528,18 @@ class CHCScheduler {
             dayData.shifts.close.push(closeProvider.name);
             closeProvider.assignedDays++;
             closeProvider.currentShifts.push({ day: day, shiftType: 'close' });
+            assignedProviders++;
         }
         
-        // Finally, assign mid shift (lowest priority)
-        const midProvider = this.selectProviderForShift(workingProviders, dayData, 'mid', false);
-        if (midProvider) {
-            dayData.shifts.mid.push(midProvider.name);
-            midProvider.assignedDays++;
-            midProvider.currentShifts.push({ day: day, shiftType: 'mid' });
+        // Finally, assign mid shift (lowest priority) - only if we haven't reached max providers
+        if (assignedProviders < maxProviders) {
+            const midProvider = this.selectProviderForShift(workingProviders, dayData, 'mid', false);
+            if (midProvider) {
+                dayData.shifts.mid.push(midProvider.name);
+                midProvider.assignedDays++;
+                midProvider.currentShifts.push({ day: day, shiftType: 'mid' });
+                assignedProviders++;
+            }
         }
     }
 
