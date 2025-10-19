@@ -107,15 +107,36 @@ baseScore = (10 - assignedDays) * 10
 
 #### 2. Shift Preference Score
 ```javascript
-if (shiftPreferences.includes(shiftType)) {
-    preferenceScore = (preferences.length - index) * 20
+if (shiftPreferenceIndex !== -1) {
+    // 1st preference gets highest score, 2nd gets medium, 3rd gets very low (last resort)
+    if (shiftPreferenceIndex === 0) {
+        score += 100; // Highest priority for 1st preference
+    } else if (shiftPreferenceIndex === 1) {
+        score += 50; // Medium priority for 2nd preference
+    } else if (shiftPreferenceIndex === 2) {
+        score += 5; // Very low priority for 3rd preference (absolute last resort)
+    } else {
+        score += 1; // Minimal score for any other preferences
+    }
+} else if (shiftPreferences.length === 0) {
+    // Person has no preferences (empty shift preferences column) - they don't care
+    // Give them a moderate score, but lower than people with explicit preferences
+    score += 25;
 } else {
-    preferenceScore = Math.random() * 5
+    // Person has preferences but this shift type isn't in them
+    // This is worse than having no preferences at all
+    score += Math.random() * 5;
 }
 ```
-- **Purpose**: Honors provider shift preferences
-- **Range**: 0-60 points (for 3 preferences)
+- **Purpose**: Honors provider shift preferences with strong prioritization
+- **Range**: 1-100 points (1st preference gets 100, 2nd gets 50, 3rd gets 5)
 - **Higher score**: Earlier preference match
+- **Key Features**:
+  - **1st Preference**: Gets highest priority (100 points)
+  - **2nd Preference**: Gets medium priority (50 points)  
+  - **3rd Preference**: Gets very low priority (5 points) - absolute last resort
+  - **No Preferences**: Gets moderate score (25 points) - lower than explicit preferences
+  - **Mismatched Preferences**: Gets lowest score (random 0-5 points)
 
 #### 3. Saturday Coverage Score
 ```javascript

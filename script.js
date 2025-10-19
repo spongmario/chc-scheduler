@@ -140,7 +140,7 @@ class CHCScheduler {
     }
 
     parseShiftPreference(prefStr) {
-        if (!prefStr) return ['mid'];
+        if (!prefStr) return []; // Empty array indicates no preferences (they don't care)
         const prefs = prefStr.toString().split(',').map(p => p.trim().toLowerCase());
         const shiftMap = {
             'open': 'open', 'opening': 'open',
@@ -149,7 +149,7 @@ class CHCScheduler {
         };
         
         const parsedPrefs = prefs.map(pref => shiftMap[pref]).filter(p => p !== undefined);
-        return parsedPrefs.length > 0 ? parsedPrefs : ['mid'];
+        return parsedPrefs.length > 0 ? parsedPrefs : []; // Empty array if no valid preferences
     }
 
     parsePTODates(ptoStr) {
@@ -400,19 +400,25 @@ class CHCScheduler {
             allProviders.push(...locationProviders[location]);
         }
         
-        // Add float providers to all locations (they can work anywhere)
+        // Create shared float provider tracking (CRITICAL: Float providers need shared counters)
+        const sharedFloatProviders = {};
         if (this.floatProviders && this.floatProviders.length > 0) {
-            const floatProvidersCopy = this.floatProviders.map(p => ({
-                ...p,
-                assignedDays: 0,
-                assignedSaturdays: 0,
-                assignedHolidays: 0,
-                currentShifts: [],
-                location: 'Float',
-                isFloat: true
-            }));
-            allProviders.push(...floatProvidersCopy);
+            this.floatProviders.forEach(p => {
+                sharedFloatProviders[p.name] = {
+                    ...p,
+                    assignedDays: 0,
+                    assignedSaturdays: 0,
+                    assignedHolidays: 0,
+                    currentShifts: [],
+                    location: 'Float',
+                    isFloat: true
+                };
+                allProviders.push(sharedFloatProviders[p.name]);
+            });
         }
+        
+        // Store shared float providers for cross-location tracking
+        this.sharedFloatProviders = sharedFloatProviders;
         
         // First, handle holidays for all providers
         for (const location in schedule) {
@@ -451,19 +457,37 @@ class CHCScheduler {
             currentShifts: []
         }));
 
-        // Add float providers to the working providers list
-        const floatProviders = allProviders.filter(p => p.isFloat);
-        const floatProvidersCopy = floatProviders.map(p => ({
-            ...p,
-            assignedDays: 0,
-            assignedSaturdays: 0,
-            assignedHolidays: 0,
-            currentShifts: []
-        }));
-        workingProviders.push(...floatProvidersCopy);
+        // Add shared float providers to the working providers list (CRITICAL: Use shared tracking)
+        if (this.sharedFloatProviders) {
+            Object.values(this.sharedFloatProviders).forEach(floatProvider => {
+                workingProviders.push(floatProvider);
+            });
+        }
 
         // Use the original Saturday-first logic
         this.distributeShiftsWithRankingForLocation(schedule, workingProviders);
+    }
+
+    // Helper method to assign a provider to a shift and update shared float provider tracking
+    assignProviderToShiftWithFloatTracking(provider, dayData, shiftType, day) {
+        if (provider.isFloat && this.sharedFloatProviders && this.sharedFloatProviders[provider.name]) {
+            // Update the shared float provider tracking
+            const sharedProvider = this.sharedFloatProviders[provider.name];
+            sharedProvider.assignedDays++;
+            sharedProvider.currentShifts.push({ day: day, shiftType: shiftType });
+            
+            // Also update the local provider reference
+            provider.assignedDays++;
+            provider.currentShifts.push({ day: day, shiftType: shiftType });
+            
+            // Add to the shift assignment
+            dayData.shifts[shiftType].push(provider.name);
+        } else {
+            // Regular provider assignment
+            provider.assignedDays++;
+            provider.currentShifts.push({ day: day, shiftType: shiftType });
+            dayData.shifts[shiftType].push(provider.name);
+        }
     }
 
     selectProviderForShiftWithFloats(providers, dayData, shiftType, isSaturday, location) {
@@ -498,22 +522,50 @@ class CHCScheduler {
 
         if (availableProviders.length === 0) return null;
 
-        // Score and select best provider
+        // Score and select best provider using the new preference logic
         const scoredProviders = availableProviders.map(provider => {
             let score = 0;
             
-            // Base workload score (fewer assigned days = higher score)
-            score += (10 - provider.assignedDays) * 10;
+            // Calculate days per week progress
+            const daysWorkedThisWeek = this.getDaysWorkedThisWeek(provider, dayData.date);
+            const daysNeededThisWeek = provider.daysPerWeek;
+            const daysRemainingThisWeek = daysNeededThisWeek - daysWorkedThisWeek;
             
-            // Shift preference score
-            const prefIndex = provider.shiftPreferences.indexOf(shiftType);
-            if (prefIndex !== -1) {
-                score += (provider.shiftPreferences.length - prefIndex) * 20;
+            // Prefer providers who need more days to reach their weekly target (but don't override preferences)
+            if (daysRemainingThisWeek > 0) {
+                score += daysRemainingThisWeek * 10; // Moderate priority for providers who need days
             } else {
+                // If they've reached their weekly limit, they shouldn't be available anyway
+                score += -100; // Penalty for providers at their limit
+            }
+
+            // Prefer providers who haven't worked as much overall (secondary factor)
+            score += (10 - provider.assignedDays) * 5;
+
+            // Prefer shift preference match (check in order of preference)
+            const shiftPreferenceIndex = provider.shiftPreferences.indexOf(shiftType);
+            if (shiftPreferenceIndex !== -1) {
+                // 1st preference gets highest score, 2nd gets medium, 3rd gets very low (last resort)
+                if (shiftPreferenceIndex === 0) {
+                    score += 200; // Highest priority for 1st preference
+                } else if (shiftPreferenceIndex === 1) {
+                    score += 100; // Medium priority for 2nd preference
+                } else if (shiftPreferenceIndex === 2) {
+                    score += 10; // Very low priority for 3rd preference (absolute last resort)
+                } else {
+                    score += 1; // Minimal score for any other preferences
+                }
+            } else if (provider.shiftPreferences.length === 0) {
+                // Person has no preferences (empty shift preferences column) - they don't care
+                // Give them a moderate score, but lower than people with explicit preferences
+                score += 25;
+            } else {
+                // Person has preferences but this shift type isn't in them
+                // This is worse than having no preferences at all
                 score += Math.random() * 5;
             }
-            
-            // Random factor
+
+            // Random factor to break ties
             score += Math.random() * 10;
             
             return { provider, score };
@@ -554,7 +606,24 @@ class CHCScheduler {
                 // Prefer shift preference match
                 const shiftPreferenceIndex = p.shiftPreferences.indexOf(shiftType);
                 if (shiftPreferenceIndex !== -1) {
-                    score += (p.shiftPreferences.length - shiftPreferenceIndex) * 20;
+                    // 1st preference gets highest score, 2nd gets medium, 3rd gets very low (last resort)
+                    if (shiftPreferenceIndex === 0) {
+                        score += 200; // Highest priority for 1st preference
+                    } else if (shiftPreferenceIndex === 1) {
+                        score += 100; // Medium priority for 2nd preference
+                    } else if (shiftPreferenceIndex === 2) {
+                        score += 10; // Very low priority for 3rd preference (absolute last resort)
+                    } else {
+                        score += 1; // Minimal score for any other preferences
+                    }
+                } else if (p.shiftPreferences.length === 0) {
+                    // Person has no preferences (empty shift preferences column) - they don't care
+                    // Give them a moderate score, but lower than people with explicit preferences
+                    score += 25;
+                } else {
+                    // Person has preferences but this shift type isn't in them
+                    // This is worse than having no preferences at all
+                    score += Math.random() * 5;
                 }
                 
                 return { provider: p, score };
@@ -885,7 +954,24 @@ class CHCScheduler {
                 // Prefer shift preference match
                 const shiftPreferenceIndex = p.shiftPreferences.indexOf('mid');
                 if (shiftPreferenceIndex !== -1) {
-                    score += (p.shiftPreferences.length - shiftPreferenceIndex) * 20;
+                    // 1st preference gets highest score, 2nd gets medium, 3rd gets very low (last resort)
+                    if (shiftPreferenceIndex === 0) {
+                        score += 200; // Highest priority for 1st preference
+                    } else if (shiftPreferenceIndex === 1) {
+                        score += 100; // Medium priority for 2nd preference
+                    } else if (shiftPreferenceIndex === 2) {
+                        score += 10; // Very low priority for 3rd preference (absolute last resort)
+                    } else {
+                        score += 1; // Minimal score for any other preferences
+                    }
+                } else if (p.shiftPreferences.length === 0) {
+                    // Person has no preferences (empty shift preferences column) - they don't care
+                    // Give them a moderate score, but lower than people with explicit preferences
+                    score += 25;
+                } else {
+                    // Person has preferences but this shift type isn't in them
+                    // This is worse than having no preferences at all
+                    score += Math.random() * 5;
                 }
                 
                 return { provider: p, score };
@@ -923,10 +1009,8 @@ class CHCScheduler {
         }
         
         if (provider) {
-            dayData.shifts.mid.push(provider.name);
-            provider.assignedDays++;
+            this.assignProviderToShiftWithFloatTracking(provider, dayData, 'mid', day);
             provider.assignedSaturdays++;
-            provider.currentShifts.push({ day: day, shiftType: 'mid' });
             console.log(`Saturday ${day}: Assigned to ${provider.name} (wants ${provider.saturdaysPerMonth} Saturdays, has ${provider.assignedSaturdays})`);
         } else {
             console.warn(`CRITICAL: No provider available for Saturday ${day} - this should not happen!`);
@@ -963,9 +1047,7 @@ class CHCScheduler {
             openProvider = this.selectProviderForEmergencyFallback(workingProviders, dayData, 'open', false);
         }
         if (openProvider) {
-            dayData.shifts.open.push(openProvider.name);
-            openProvider.assignedDays++;
-            openProvider.currentShifts.push({ day: day, shiftType: 'open' });
+            this.assignProviderToShiftWithFloatTracking(openProvider, dayData, 'open', day);
             assignedProviders++;
         }
         
@@ -975,9 +1057,7 @@ class CHCScheduler {
             closeProvider = this.selectProviderForEmergencyFallback(workingProviders, dayData, 'close', false);
         }
         if (closeProvider) {
-            dayData.shifts.close.push(closeProvider.name);
-            closeProvider.assignedDays++;
-            closeProvider.currentShifts.push({ day: day, shiftType: 'close' });
+            this.assignProviderToShiftWithFloatTracking(closeProvider, dayData, 'close', day);
             assignedProviders++;
         }
         
@@ -988,9 +1068,7 @@ class CHCScheduler {
                 midProvider = this.selectProviderForEmergencyFallback(workingProviders, dayData, 'mid', false);
             }
             if (midProvider) {
-                dayData.shifts.mid.push(midProvider.name);
-                midProvider.assignedDays++;
-                midProvider.currentShifts.push({ day: day, shiftType: 'mid' });
+                this.assignProviderToShiftWithFloatTracking(midProvider, dayData, 'mid', day);
                 assignedProviders++;
             }
         }
@@ -1101,13 +1179,28 @@ class CHCScheduler {
             let score = 0;
 
             // Prefer providers who haven't worked as much overall
-            score += (10 - p.assignedDays) * 20;
+            score += (10 - p.assignedDays) * 5;
 
             // Prefer shift preference match
             const shiftPreferenceIndex = p.shiftPreferences.indexOf(shiftType);
             if (shiftPreferenceIndex !== -1) {
-                score += (p.shiftPreferences.length - shiftPreferenceIndex) * 10;
+                // 1st preference gets highest score, 2nd gets medium, 3rd gets very low (last resort)
+                if (shiftPreferenceIndex === 0) {
+                    score += 100; // Highest priority for 1st preference
+                } else if (shiftPreferenceIndex === 1) {
+                    score += 50; // Medium priority for 2nd preference
+                } else if (shiftPreferenceIndex === 2) {
+                    score += 5; // Very low priority for 3rd preference (absolute last resort)
+                } else {
+                    score += 1; // Minimal score for any other preferences
+                }
+            } else if (p.shiftPreferences.length === 0) {
+                // Person has no preferences (empty shift preferences column) - they don't care
+                // Give them a moderate score, but lower than people with explicit preferences
+                score += 15;
             } else {
+                // Person has preferences but this shift type isn't in them
+                // This is worse than having no preferences at all
                 score += Math.random() * 5;
             }
 
@@ -1184,9 +1277,9 @@ class CHCScheduler {
             const daysNeededThisWeek = p.daysPerWeek;
             const daysRemainingThisWeek = daysNeededThisWeek - daysWorkedThisWeek;
             
-            // Strongly prefer providers who need more days to reach their weekly target
+            // Prefer providers who need more days to reach their weekly target (but don't override preferences)
             if (daysRemainingThisWeek > 0) {
-                score += daysRemainingThisWeek * 50; // High priority for providers who need days
+                score += daysRemainingThisWeek * 10; // Moderate priority for providers who need days
             } else {
                 // If they've reached their weekly limit, they shouldn't be available anyway
                 score += -100; // Penalty for providers at their limit
@@ -1199,9 +1292,23 @@ class CHCScheduler {
             const shiftPreferenceIndex = p.shiftPreferences.indexOf(shiftType);
             if (shiftPreferenceIndex !== -1) {
                 // Higher score for earlier preferences (lower index)
-                score += (p.shiftPreferences.length - shiftPreferenceIndex) * 20;
+                // 1st preference gets highest score, 2nd gets medium, 3rd gets very low (last resort)
+                if (shiftPreferenceIndex === 0) {
+                    score += 200; // Highest priority for 1st preference
+                } else if (shiftPreferenceIndex === 1) {
+                    score += 100; // Medium priority for 2nd preference
+                } else if (shiftPreferenceIndex === 2) {
+                    score += 10; // Very low priority for 3rd preference (absolute last resort)
+                } else {
+                    score += 1; // Minimal score for any other preferences
+                }
+            } else if (p.shiftPreferences.length === 0) {
+                // Person has no preferences (empty shift preferences column) - they don't care
+                // Give them a moderate score, but lower than people with explicit preferences
+                score += 25;
             } else {
-                // If shift type not in preferences, add small random factor
+                // Person has preferences but this shift type isn't in them
+                // This is worse than having no preferences at all
                 score += Math.random() * 5;
             }
 

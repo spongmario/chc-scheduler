@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fixed Scoring Logic Test</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .test-case { margin: 10px 0; padding: 10px; border: 1px solid #ccc; }
+        .result { font-weight: bold; color: #0066cc; }
+        .expected { color: #666; }
+        .provider { margin: 5px 0; padding: 5px; background: #f0f0f0; }
+        .correct { background: #d4edda; border-color: #c3e6cb; }
+        .incorrect { background: #f8d7da; border-color: #f5c6cb; }
+    </style>
+</head>
+<body>
+    <h1>Fixed Scoring Logic Test - Ryan vs Dan for Open Shift</h1>
+    <div id="test-results"></div>
+
+    <script>
+        // Simulate the FIXED scoring logic
+        function calculateScore(provider, shiftType) {
+            let score = 0;
+            
+            // Base workload score (reduced)
+            score += (10 - provider.assignedDays) * 5;
+            
+            // Days per week progress (reduced from 50 to 10)
+            score += provider.daysRemainingThisWeek * 10;
+            
+            // Shift preference scoring (increased)
+            const shiftPreferenceIndex = provider.shiftPreferences.indexOf(shiftType);
+            if (shiftPreferenceIndex !== -1) {
+                if (shiftPreferenceIndex === 0) {
+                    score += 200; // Highest priority for 1st preference
+                } else if (shiftPreferenceIndex === 1) {
+                    score += 100; // Medium priority for 2nd preference
+                } else if (shiftPreferenceIndex === 2) {
+                    score += 10; // Very low priority for 3rd preference (absolute last resort)
+                } else {
+                    score += 1; // Minimal score for any other preferences
+                }
+            } else if (provider.shiftPreferences.length === 0) {
+                score += 25; // Moderate score for no preferences
+            } else {
+                score += Math.random() * 5; // Low score for mismatched preferences
+            }
+            
+            return score;
+        }
+
+        // Test providers based on the updated data
+        const providers = [
+            {
+                name: 'Ryan',
+                shiftPreferences: ['mid', 'close'], // NO 'open' preference
+                assignedDays: 0,
+                daysRemainingThisWeek: 4
+            },
+            {
+                name: 'Dan', 
+                shiftPreferences: ['open', 'mid'], // 'open' is 1st preference
+                assignedDays: 0,
+                daysRemainingThisWeek: 4
+            }
+        ];
+
+        const shiftType = 'open';
+        
+        const resultsDiv = document.getElementById('test-results');
+        
+        // Test FIXED logic
+        resultsDiv.innerHTML += '<h2>FIXED Logic Results:</h2>';
+        
+        providers.forEach(provider => {
+            const score = calculateScore(provider, shiftType);
+            const preferenceIndex = provider.shiftPreferences.indexOf(shiftType);
+            const preferenceText = preferenceIndex === -1 ? 'Not in preferences' : 
+                                  preferenceIndex === 0 ? '1st preference' :
+                                  preferenceIndex === 1 ? '2nd preference' :
+                                  preferenceIndex === 2 ? '3rd preference (last resort)' :
+                                  `${preferenceIndex + 1}th preference`;
+            
+            resultsDiv.innerHTML += `
+                <div class="provider">
+                    <strong>${provider.name}</strong><br>
+                    Preferences: ${provider.shiftPreferences.join(', ')}<br>
+                    For "open" shift: ${preferenceText}<br>
+                    <strong>Score: ${score}</strong>
+                </div>
+            `;
+        });
+        
+        // Show the result
+        const ryanScore = calculateScore(providers[0], shiftType);
+        const danScore = calculateScore(providers[1], shiftType);
+        
+        const isCorrect = danScore > ryanScore;
+        const resultClass = isCorrect ? 'correct' : 'incorrect';
+        
+        resultsDiv.innerHTML += `
+            <div class="test-case ${resultClass}">
+                <h3>Result Analysis:</h3>
+                <p><strong>Ryan's score:</strong> ${ryanScore} (no 'open' preference)</p>
+                <p><strong>Dan's score:</strong> ${danScore} ('open' is 1st preference)</p>
+                <p><strong>Winner:</strong> ${danScore > ryanScore ? 'Dan' : 'Ryan'}</p>
+                <p><strong>Status:</strong> ${isCorrect ? 
+                    '✅ CORRECT - Dan (1st preference) beats Ryan (no preference)' : 
+                    '❌ INCORRECT - Ryan still beats Dan'}</p>
+            </div>
+        `;
+        
+        // Show the scoring breakdown
+        resultsDiv.innerHTML += `
+            <div class="test-case">
+                <h3>Scoring Breakdown:</h3>
+                <h4>Ryan (no 'open' preference):</h4>
+                <ul>
+                    <li>Base workload: ${(10 - 0) * 5} = 50 points</li>
+                    <li>Days remaining: ${4 * 10} = 40 points</li>
+                    <li>Preference match: 0 points (not in preferences)</li>
+                    <li>Mismatched preference penalty: ~2.5 points</li>
+                    <li><strong>Total: ~92.5 points</strong></li>
+                </ul>
+                
+                <h4>Dan ('open' is 1st preference):</h4>
+                <ul>
+                    <li>Base workload: ${(10 - 0) * 5} = 50 points</li>
+                    <li>Days remaining: ${4 * 10} = 40 points</li>
+                    <li>Preference match: 200 points (1st preference)</li>
+                    <li><strong>Total: 290 points</strong></li>
+                </ul>
+            </div>
+        `;
+    </script>
+</body>
+</html>

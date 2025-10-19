@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Preference Parsing</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .test-case { margin: 10px 0; padding: 10px; border: 1px solid #ccc; }
+        .result { font-weight: bold; color: #0066cc; }
+        .expected { color: #666; }
+    </style>
+</head>
+<body>
+    <h1>Preference Parsing Test</h1>
+    <div id="test-results"></div>
+
+    <script>
+        // Copy the parseShiftPreference method for testing
+        function parseShiftPreference(prefStr) {
+            if (!prefStr) return []; // Empty array indicates no preferences (they don't care)
+            const prefs = prefStr.toString().split(',').map(p => p.trim().toLowerCase());
+            const shiftMap = {
+                'open': 'open', 'opening': 'open',
+                'mid': 'mid', 'middle': 'mid',
+                'close': 'close', 'closing': 'close'
+            };
+            
+            const parsedPrefs = prefs.map(pref => shiftMap[pref]).filter(p => p !== undefined);
+            return parsedPrefs.length > 0 ? parsedPrefs : []; // Empty array if no valid preferences
+        }
+
+        // Test cases
+        const testCases = [
+            { input: '', expected: [], description: 'Empty string (no preferences)' },
+            { input: 'open,mid,close', expected: ['open', 'mid', 'close'], description: 'Three preferences' },
+            { input: 'open,mid', expected: ['open', 'mid'], description: 'Two preferences' },
+            { input: 'open', expected: ['open'], description: 'One preference' },
+            { input: 'mid,open,close', expected: ['mid', 'open', 'close'], description: 'Three preferences in different order' },
+            { input: 'invalid,open', expected: ['open'], description: 'Mixed valid and invalid preferences' },
+            { input: 'invalid', expected: [], description: 'Only invalid preferences' },
+            { input: null, expected: [], description: 'Null input' },
+            { input: undefined, expected: [], description: 'Undefined input' }
+        ];
+
+        const resultsDiv = document.getElementById('test-results');
+        
+        testCases.forEach((testCase, index) => {
+            const result = parseShiftPreference(testCase.input);
+            const passed = JSON.stringify(result) === JSON.stringify(testCase.expected);
+            
+            const testDiv = document.createElement('div');
+            testDiv.className = 'test-case';
+            testDiv.innerHTML = `
+                <h3>Test ${index + 1}: ${testCase.description}</h3>
+                <p><strong>Input:</strong> "${testCase.input}"</p>
+                <p><strong>Expected:</strong> <span class="expected">${JSON.stringify(testCase.expected)}</span></p>
+                <p><strong>Result:</strong> <span class="result">${JSON.stringify(result)}</span></p>
+                <p><strong>Status:</strong> <span style="color: ${passed ? 'green' : 'red'}">${passed ? 'PASS' : 'FAIL'}</span></p>
+            `;
+            
+            resultsDiv.appendChild(testDiv);
+        });
+
+        // Test scoring logic
+        function testScoring() {
+            const scoringDiv = document.createElement('div');
+            scoringDiv.className = 'test-case';
+            scoringDiv.innerHTML = '<h2>Scoring Logic Test</h2>';
+            
+            const testProviders = [
+                { name: 'Provider A', shiftPreferences: ['open', 'mid', 'close'], description: 'Has 3 preferences' },
+                { name: 'Provider B', shiftPreferences: ['open', 'mid'], description: 'Has 2 preferences' },
+                { name: 'Provider C', shiftPreferences: ['open'], description: 'Has 1 preference' },
+                { name: 'Provider D', shiftPreferences: [], description: 'No preferences (empty column)' },
+                { name: 'Provider E', shiftPreferences: ['close'], description: 'Has 1 preference (different shift)' }
+            ];
+
+            const shiftType = 'open';
+            
+            testProviders.forEach(provider => {
+                const shiftPreferenceIndex = provider.shiftPreferences.indexOf(shiftType);
+                let score = 0;
+                
+                if (shiftPreferenceIndex !== -1) {
+                    if (shiftPreferenceIndex === 0) {
+                        score += 100; // Highest priority for 1st preference
+                    } else if (shiftPreferenceIndex === 1) {
+                        score += 50; // Medium priority for 2nd preference
+                    } else if (shiftPreferenceIndex === 2) {
+                        score += 5; // Very low priority for 3rd preference (absolute last resort)
+                    } else {
+                        score += 1; // Minimal score for any other preferences
+                    }
+                } else if (provider.shiftPreferences.length === 0) {
+                    score += 25; // Moderate score for no preferences
+                } else {
+                    score += Math.random() * 5; // Low score for mismatched preferences
+                }
+                
+                scoringDiv.innerHTML += `
+                    <p><strong>${provider.name}</strong> (${provider.description}): 
+                    Index=${shiftPreferenceIndex}, Score=${score}</p>
+                `;
+            });
+            
+            resultsDiv.appendChild(scoringDiv);
+        }
+
+        testScoring();
+    </script>
+</body>
+</html>

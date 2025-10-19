@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Scoring Logic</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .test-case { margin: 10px 0; padding: 10px; border: 1px solid #ccc; }
+        .result { font-weight: bold; color: #0066cc; }
+        .expected { color: #666; }
+        .provider { margin: 5px 0; padding: 5px; background: #f0f0f0; }
+    </style>
+</head>
+<body>
+    <h1>Scoring Logic Test - Ryan vs Dan for Open Shift</h1>
+    <div id="test-results"></div>
+
+    <script>
+        // Simulate the scoring logic
+        function calculateScore(provider, shiftType) {
+            let score = 0;
+            
+            // Base workload score (simplified)
+            score += (10 - provider.assignedDays) * 10;
+            
+            // Days per week progress (simplified)
+            score += provider.daysRemainingThisWeek * 50;
+            
+            // Shift preference scoring
+            const shiftPreferenceIndex = provider.shiftPreferences.indexOf(shiftType);
+            if (shiftPreferenceIndex !== -1) {
+                if (shiftPreferenceIndex === 0) {
+                    score += 100; // Highest priority for 1st preference
+                } else if (shiftPreferenceIndex === 1) {
+                    score += 50; // Medium priority for 2nd preference
+                } else if (shiftPreferenceIndex === 2) {
+                    score += 5; // Very low priority for 3rd preference (absolute last resort)
+                } else {
+                    score += 1; // Minimal score for any other preferences
+                }
+            } else if (provider.shiftPreferences.length === 0) {
+                score += 25; // Moderate score for no preferences
+            } else {
+                score += Math.random() * 5; // Low score for mismatched preferences
+            }
+            
+            return score;
+        }
+
+        // Test providers based on the image data
+        const providers = [
+            {
+                name: 'Ryan',
+                shiftPreferences: ['mid', 'close', 'open'], // open is 3rd preference
+                assignedDays: 0,
+                daysRemainingThisWeek: 4
+            },
+            {
+                name: 'Dan', 
+                shiftPreferences: ['open', 'mid', 'close'], // open is 1st preference
+                assignedDays: 0,
+                daysRemainingThisWeek: 4
+            }
+        ];
+
+        const shiftType = 'open';
+        
+        const resultsDiv = document.getElementById('test-results');
+        
+        // Test current logic
+        resultsDiv.innerHTML += '<h2>Current Logic Results:</h2>';
+        
+        providers.forEach(provider => {
+            const score = calculateScore(provider, shiftType);
+            const preferenceIndex = provider.shiftPreferences.indexOf(shiftType);
+            const preferenceText = preferenceIndex === -1 ? 'Not in preferences' : 
+                                  preferenceIndex === 0 ? '1st preference' :
+                                  preferenceIndex === 1 ? '2nd preference' :
+                                  preferenceIndex === 2 ? '3rd preference (last resort)' :
+                                  `${preferenceIndex + 1}th preference`;
+            
+            resultsDiv.innerHTML += `
+                <div class="provider">
+                    <strong>${provider.name}</strong><br>
+                    Preferences: ${provider.shiftPreferences.join(', ')}<br>
+                    For "open" shift: ${preferenceText}<br>
+                    <strong>Score: ${score}</strong>
+                </div>
+            `;
+        });
+        
+        // Show the problem
+        const ryanScore = calculateScore(providers[0], shiftType);
+        const danScore = calculateScore(providers[1], shiftType);
+        
+        resultsDiv.innerHTML += `
+            <div class="test-case">
+                <h3>Problem Analysis:</h3>
+                <p><strong>Ryan's score:</strong> ${ryanScore}</p>
+                <p><strong>Dan's score:</strong> ${danScore}</p>
+                <p><strong>Winner:</strong> ${ryanScore > danScore ? 'Ryan' : 'Dan'}</p>
+                <p><strong>Issue:</strong> ${ryanScore > danScore ? 
+                    'Ryan (3rd preference) beats Dan (1st preference) - This is wrong!' : 
+                    'Dan (1st preference) beats Ryan (3rd preference) - This is correct!'}</p>
+            </div>
+        `;
+        
+        // Test with Ryan having no "open" preference
+        resultsDiv.innerHTML += '<h2>Solution: Remove "open" from Ryan\'s preferences</h2>';
+        
+        const ryanWithoutOpen = {
+            name: 'Ryan (without open preference)',
+            shiftPreferences: ['mid', 'close'], // removed 'open'
+            assignedDays: 0,
+            daysRemainingThisWeek: 4
+        };
+        
+        const ryanNewScore = calculateScore(ryanWithoutOpen, shiftType);
+        
+        resultsDiv.innerHTML += `
+            <div class="provider">
+                <strong>${ryanWithoutOpen.name}</strong><br>
+                Preferences: ${ryanWithoutOpen.shiftPreferences.join(', ')}<br>
+                For "open" shift: Not in preferences<br>
+                <strong>Score: ${ryanNewScore}</strong>
+            </div>
+        `;
+        
+        resultsDiv.innerHTML += `
+            <div class="test-case">
+                <h3>With Ryan's "open" preference removed:</h3>
+                <p><strong>Ryan's new score:</strong> ${ryanNewScore}</p>
+                <p><strong>Dan's score:</strong> ${danScore}</p>
+                <p><strong>Winner:</strong> ${ryanNewScore > danScore ? 'Ryan' : 'Dan'}</p>
+                <p><strong>Result:</strong> ${ryanNewScore > danScore ? 
+                    'Still wrong - Ryan beats Dan' : 
+                    'Correct - Dan (1st preference) beats Ryan (no preference)'}</p>
+            </div>
+        `;
+    </script>
+</body>
+</html>
