@@ -862,11 +862,27 @@ main {
     border-color: #667eea;
 }
 
-.highlighted {
+.highlighted-cell {
     background-color: #fff3cd !important;
-    border: 2px solid #ffc107 !important;
+    /* Use outline instead of border to prevent layout shift */
+    outline: 3px solid #ffc107 !important;
+    outline-offset: -1px;
     box-shadow: 0 0 10px rgba(255, 193, 7, 0.5) !important;
     animation: pulse 1s ease-in-out;
+    position: relative;
+    z-index: 10;
+}
+
+/* Add pin to the first cell of a highlighted row */
+.highlighted-cell:first-child::before {
+    content: "📍";
+    position: absolute;
+    top: -5px;
+    right: -5px;
+    font-size: 1.2rem;
+    z-index: 11;
+    /* Ensure the pin doesn't affect layout */
+    pointer-events: none;
 }
 
 @keyframes pulse {
@@ -896,11 +912,28 @@ main {
 .issue-item {
     cursor: pointer;
     user-select: none;
+    position: relative;
+    transition: all 0.2s ease;
+}
+
+.issue-item::after {
+    content: "👆";
+    position: absolute;
+    right: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    opacity: 0;
+    transition: opacity 0.2s ease;
+    font-size: 1rem;
 }
 
 .issue-item:hover {
     transform: translateX(5px);
     box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+}
+
+.issue-item:hover::after {
+    opacity: 1;
 }
 
 .workload-table tbody tr {

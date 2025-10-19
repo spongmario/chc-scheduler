@@ -1546,6 +1546,7 @@ class CHCScheduler {
             item.addEventListener('click', (e) => {
                 const issueText = e.currentTarget.querySelector('.issue-text').textContent;
                 this.highlightRelatedEntries(issueText);
+                this.scrollToIssue(issueText);
             });
         });
 
@@ -1570,24 +1571,171 @@ class CHCScheduler {
 
     highlightRelatedEntries(issueText) {
         // Remove previous highlights
-        document.querySelectorAll('.highlighted').forEach(el => {
-            el.classList.remove('highlighted');
+        document.querySelectorAll('.highlighted-cell').forEach(el => {
+            el.classList.remove('highlighted-cell');
         });
 
         // Highlight related calendar entries based on issue text
         if (issueText.includes('understaffed')) {
             document.querySelectorAll('.issue-alert.error').forEach(alert => {
                 if (alert.textContent.includes('Understaffed')) {
-                    alert.closest('tr').classList.add('highlighted');
+                    const row = alert.closest('tr');
+                    if (row) {
+                        const cells = row.querySelectorAll('td');
+                        cells.forEach(cell => {
+                            cell.classList.add('highlighted-cell');
+                        });
+                    }
                 }
             });
         } else if (issueText.includes('overworked')) {
             const providerName = issueText.split(' ')[0];
             document.querySelectorAll(`.shift`).forEach(shift => {
                 if (shift.textContent.includes(providerName)) {
-                    shift.classList.add('highlighted');
+                    const row = shift.closest('tr');
+                    if (row) {
+                        const cells = row.querySelectorAll('td');
+                        cells.forEach(cell => {
+                            cell.classList.add('highlighted-cell');
+                        });
+                    }
                 }
             });
+        }
+    }
+
+    scrollToIssue(issueText) {
+        // Extract day number and location from issue text
+        const dayMatch = issueText.match(/Day (\d+)/);
+        const locationMatch = issueText.match(/(\w+): Day/);
+        
+        if (dayMatch) {
+            const dayNum = dayMatch[1];
+            const location = locationMatch ? locationMatch[1] : 'Central'; // Default to Central if not specified
+            
+            // Find the specific day row in the schedule
+            const locationSchedules = document.querySelectorAll('.location-schedule');
+            let targetRow = null;
+            
+            for (const locationSchedule of locationSchedules) {
+                const header = locationSchedule.querySelector('.location-header');
+                if (header && header.textContent.includes(location)) {
+                    // Find the row with the matching day number
+                    const rows = locationSchedule.querySelectorAll('tbody tr');
+                    for (const row of rows) {
+                        const firstCell = row.querySelector('td:first-child');
+                        if (firstCell && firstCell.textContent.trim() === dayNum) {
+                            targetRow = row;
+                            break;
+                        }
+                    }
+                    break;
+                }
+            }
+            
+            if (targetRow) {
+                // Scroll to the day row with smooth behavior
+                targetRow.scrollIntoView({ 
+                    behavior: 'smooth', 
+                    block: 'center' 
+                });
+                
+                // Add a temporary highlight effect to individual cells instead of the whole row
+                const cells = targetRow.querySelectorAll('td');
+                cells.forEach(cell => {
+                    cell.classList.add('highlighted-cell');
+                });
+                
+                // Remove highlight after 3 seconds
+                setTimeout(() => {
+                    cells.forEach(cell => {
+                        cell.classList.remove('highlighted-cell');
+                    });
+                }, 3000);
+            }
+        } else if (issueText.includes('overworked')) {
+            // For overworked issues, scroll to the first occurrence of the provider
+            const providerName = issueText.split(' ')[0];
+            const allShifts = document.querySelectorAll('.shift');
+            let firstShift = null;
+            
+            for (const shift of allShifts) {
+                if (shift.textContent.includes(providerName)) {
+                    firstShift = shift;
+                    break;
+                }
+            }
+            
+            if (firstShift) {
+                firstShift.scrollIntoView({ 
+                    behavior: 'smooth', 
+                    block: 'center' 
+                });
+                
+                // Highlight the row containing this shift
+                const row = firstShift.closest('tr');
+                if (row) {
+                    const cells = row.querySelectorAll('td');
+                    cells.forEach(cell => {
+                        cell.classList.add('highlighted-cell');
+                    });
+                    setTimeout(() => {
+                        cells.forEach(cell => {
+                            cell.classList.remove('highlighted-cell');
+                        });
+                    }, 3000);
+                }
+            }
+        } else if (issueText.includes('preferred day off') || issueText.includes('not preferred')) {
+            // For preference violations, extract day and location
+            const dayMatch = issueText.match(/Day (\d+)/);
+            const locationMatch = issueText.match(/(\w+): Day/);
+            
+            if (dayMatch) {
+                const dayNum = dayMatch[1];
+                const location = locationMatch ? locationMatch[1] : 'Central';
+                
+                // Find the specific day row in the schedule
+                const locationSchedules = document.querySelectorAll('.location-schedule');
+                let targetRow = null;
+                
+                for (const locationSchedule of locationSchedules) {
+                    const header = locationSchedule.querySelector('.location-header');
+                    if (header && header.textContent.includes(location)) {
+                        // Find the row with the matching day number
+                        const rows = locationSchedule.querySelectorAll('tbody tr');
+                        for (const row of rows) {
+                            const firstCell = row.querySelector('td:first-child');
+                            if (firstCell && firstCell.textContent.trim() === dayNum) {
+                                targetRow = row;
+                                break;
+                            }
+                        }
+                        break;
+                    }
+                }
+                
+                if (targetRow) {
+                    // Scroll to the day row with smooth behavior
+                    targetRow.scrollIntoView({ 
+                        behavior: 'smooth', 
+                        block: 'center' 
+                    });
+                    
+                    // Add a temporary highlight effect to individual cells instead of the whole row
+                    const cells = targetRow.querySelectorAll('td');
+                    cells.forEach(cell => {
+                        cell.classList.add('highlighted-cell');
+                    });
+                    
+                    // Remove highlight after 3 seconds
+                    setTimeout(() => {
+                        cells.forEach(cell => {
+                            cell.classList.remove('highlighted-cell');
+                        });
+                    }, 3000);
+                }
+            }
         }
     }
 
@@ -1983,12 +2131,19 @@ class CHCScheduler {
                 });
             }
             
+            // Track individual preference violations with dates
             if (stats.preferenceViolations > 0) {
-                analysis.issues.push({
-                    type: 'preference',
-                    severity: 'warning',
-                    message: `${provider.name} has ${stats.preferenceViolations} preference violations`,
-                    provider: provider.name
+                // Find the specific dates where preference violations occurred
+                const violationDates = this.findPreferenceViolationDates(provider, location, year, month);
+                violationDates.forEach(violation => {
+                    analysis.issues.push({
+                        type: 'preference',
+                        severity: 'warning',
+                        message: `${location}: Day ${violation.day} - ${provider.name} ${violation.violationType}`,
+                        provider: provider.name,
+                        day: violation.day,
+                        location: location
+                    });
                 });
             }
         });
@@ -2036,6 +2191,56 @@ class CHCScheduler {
         });
         
         return issues;
+    }
+
+    findPreferenceViolationDates(provider, location, year, month) {
+        const violations = [];
+        
+        // Check each day in the schedule for this location
+        if (this.schedule[location]) {
+            for (const day in this.schedule[location]) {
+                const dayData = this.schedule[location][day];
+                const dayNum = parseInt(day);
+                const date = new Date(year, month, dayNum);
+                
+                // Check if this provider is assigned on this day
+                const assignedShifts = [];
+                ['open', 'mid', 'close'].forEach(shiftType => {
+                    const providers = dayData.shifts[shiftType] || [];
+                    if (providers.includes(provider.name)) {
+                        assignedShifts.push(shiftType);
+                    }
+                });
+                
+                if (assignedShifts.length > 0) {
+                    // Check for preferred day off violation
+                    if (provider.preferredDaysOff.includes(dayData.dayOfWeek)) {
+                        violations.push({
+                            day: dayNum,
+                            violationType: `working on preferred day off (${this.getDayName(dayData.dayOfWeek)})`
+                        });
+                    }
+                    
+                    // Check for shift preference violations
+                    assignedShifts.forEach(shiftType => {
+                        if (provider.shiftPreferences.length > 0 && 
+                            !provider.shiftPreferences.includes(shiftType)) {
+                            violations.push({
+                                day: dayNum,
+                                violationType: `assigned ${shiftType} shift (not preferred)`
+                            });
+                        }
+                    });
+                }
+            }
+        }
+        
+        return violations;
+    }
+
+    getDayName(dayOfWeek) {
+        const dayNames = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+        return dayNames[dayOfWeek];
     }
 
     getIssueIcon(issueType) {
