@@ -5,6 +5,7 @@ class CHCScheduler {
         this.selectedMonth = null;
         this.holidays = this.initializeHolidays();
         this.dayRanking = this.initializeDayRanking();
+        this.isProcessingMove = false; // Flag to prevent multiple simultaneous moves
         this.initializeEventListeners();
     }
 
@@ -2502,7 +2503,7 @@ class CHCScheduler {
             }
         });
 
-        // Add drop handlers to all shift cells
+        // Add drop handlers to all shift cells with debouncing
         document.querySelectorAll('.shift-cell').forEach(cell => {
             if (!cell.hasAttribute('data-drop-handler')) {
                 cell.setAttribute('data-drop-handler', 'true');
@@ -2629,6 +2630,14 @@ class CHCScheduler {
     }
 
     swapProviders(dragData, targetShiftElement, targetCell) {
+        // Prevent multiple simultaneous operations
+        if (this.isProcessingMove) {
+            console.log('Move already in progress, ignoring duplicate swap call');
+            return;
+        }
+        
+        this.isProcessingMove = true;
+        
         const sourceProvider = dragData.provider;
         const targetProvider = targetShiftElement.getAttribute('data-provider');
         
@@ -2643,6 +2652,7 @@ class CHCScheduler {
         // Validate both moves
         if (!this.validateProviderMove(sourceProvider, targetDay, targetShift, targetLocation, sourceShift) ||
             !this.validateProviderMove(targetProvider, sourceDay, sourceShift, sourceLocation, targetShift)) {
+            this.isProcessingMove = false;
             return;
         }
         
@@ -2654,9 +2664,22 @@ class CHCScheduler {
         
         // Update dashboard
         this.updateDashboard();
+        
+        // Reset the flag after a short delay
+        setTimeout(() => {
+            this.isProcessingMove = false;
+        }, 100);
     }
 
     moveProvider(dragData, targetCell) {
+        // Prevent multiple simultaneous moves
+        if (this.isProcessingMove) {
+            console.log('Move already in progress, ignoring duplicate call');
+            return;
+        }
+        
+        this.isProcessingMove = true;
+        
         const provider = dragData.provider;
         const targetDay = parseInt(targetCell.dataset.day);
         const targetShift = targetCell.dataset.shift;
@@ -2667,13 +2690,23 @@ class CHCScheduler {
         
         // Validate the move
         if (!this.validateProviderMove(provider, targetDay, targetShift, targetLocation, sourceShift)) {
+            this.isProcessingMove = false;
             return;
         }
         
         console.log(`Moving ${provider} from ${sourceLocation} day ${sourceDay} ${sourceShift} to ${targetLocation} day ${targetDay} ${targetShift}`);
+        console.log(`Before nuclear cleanup - source:`, this.schedule[sourceLocation][sourceDay].shifts[sourceShift]);
+        console.log(`Before nuclear cleanup - target:`, this.schedule[targetLocation][targetDay].shifts[targetShift]);
         
-        // Add to target (this will automatically remove from all other shifts on the same day)
+        // Remove provider from ALL shifts everywhere first (nuclear option to prevent double-booking)
+        this.removeProviderFromAllShiftsEverywhere(provider);
+        
+        console.log(`After nuclear cleanup - source:`, this.schedule[sourceLocation][sourceDay].shifts[sourceShift]);
+        console.log(`After nuclear cleanup - target:`, this.schedule[targetLocation][targetDay].shifts[targetShift]);
+        
+        // Add to target shift
         this.addProviderToShift(targetDay, targetShift, targetLocation, provider);
+        console.log(`After addition to target:`, this.schedule[targetLocation][targetDay].shifts[targetShift]);
         
         // Update displays for both source and target
         const sourceCell = document.querySelector(`[data-day="${sourceDay}"][data-shift="${sourceShift}"][data-location="${sourceLocation}"]`);
@@ -2690,6 +2723,11 @@ class CHCScheduler {
         
         // Update dashboard
         this.updateDashboard();
+        
+        // Reset the flag after a short delay to allow for UI updates
+        setTimeout(() => {
+            this.isProcessingMove = false;
+        }, 100);
     }
 
     validateProviderMove(provider, day, shiftType, location, sourceShiftType = null) {
@@ -2757,9 +2795,9 @@ class CHCScheduler {
     }
 
     performProviderSwap(sourceProvider, sourceDay, sourceShift, sourceLocation, targetProvider, targetDay, targetShift, targetLocation) {
-        // Remove both providers from their current shifts
-        this.removeProviderFromShift(sourceDay, sourceShift, sourceLocation, sourceProvider);
-        this.removeProviderFromShift(targetDay, targetShift, targetLocation, targetProvider);
+        // Remove both providers from ALL shifts everywhere first
+        this.removeProviderFromAllShiftsEverywhere(sourceProvider);
+        this.removeProviderFromAllShiftsEverywhere(targetProvider);
         
         // Add them to each other's shifts
         this.addProviderToShift(targetDay, targetShift, targetLocation, sourceProvider);
@@ -2793,10 +2831,7 @@ class CHCScheduler {
             this.schedule[location][day].shifts[shiftType] = [];
         }
         
-        // Remove provider from all other shifts on the same day first
-        this.removeProviderFromAllShiftsOnDay(day, location, provider);
-        
-        // Then add to the target shift
+        // Add to the target shift (provider should already be removed from everywhere by nuclear cleanup)
         this.schedule[location][day].shifts[shiftType].push(provider);
         console.log(`Added ${provider} to ${location} day ${day} ${shiftType}. Now has:`, this.schedule[location][day].shifts[shiftType]);
     }
@@ -2812,6 +2847,31 @@ class CHCScheduler {
                 }
             }
         }
+    }
+
+    removeProviderFromAllShiftsEverywhere(provider) {
+        // Remove provider from all shifts across all days and locations
+        let removedCount = 0;
+        for (const location in this.schedule) {
+            for (const day in this.schedule[location]) {
+                const beforeCount = this.countProviderInDay(parseInt(day), location, provider);
+                this.removeProviderFromAllShiftsOnDay(parseInt(day), location, provider);
+                const afterCount = this.countProviderInDay(parseInt(day), location, provider);
+                removedCount += (beforeCount - afterCount);
+            }
+        }
+        console.log(`Removed ${provider} from ${removedCount} shifts everywhere`);
+    }
+
+    countProviderInDay(day, location, provider) {
+        let count = 0;
+        const dayData = this.schedule[location][day];
+        for (const [shiftType, providers] of Object.entries(dayData.shifts)) {
+            if (Array.isArray(providers) && providers.includes(provider)) {
+                count++;
+            }
+        }
+        return count;
     }
 }
 
