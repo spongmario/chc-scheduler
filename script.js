@@ -419,16 +419,8 @@ class CHCScheduler {
                     provider.currentShifts.push({ day: parseInt(day), shiftType: 'mid' });
                 }
             } else {
-                // Other weekdays: assign open, mid, close shifts
-                const shiftsNeeded = ['open', 'mid', 'close'];
-                for (const shiftType of shiftsNeeded) {
-                    const provider = this.selectProviderForShift(workingProviders, dayData, shiftType, isSaturday);
-                    if (provider) {
-                        dayData.shifts[shiftType].push(provider.name);
-                        provider.assignedDays++;
-                        provider.currentShifts.push({ day: parseInt(day), shiftType });
-                    }
-                }
+                // Other weekdays: prioritize open and close shifts before mid shift
+                this.assignWeekdayShifts(workingProviders, dayData, parseInt(day));
             }
         }
     }
@@ -476,6 +468,35 @@ class CHCScheduler {
                 fallbackProvider.currentShifts.push({ day: day, shiftType: 'mid' });
                 assignedProviders++;
             }
+        }
+    }
+
+    assignWeekdayShifts(workingProviders, dayData, day) {
+        // Weekday constraints: prioritize open and close shifts before mid shift
+        // This ensures proper clinic coverage for opening and closing times
+        
+        // First, assign open shift (highest priority)
+        const openProvider = this.selectProviderForShift(workingProviders, dayData, 'open', false);
+        if (openProvider) {
+            dayData.shifts.open.push(openProvider.name);
+            openProvider.assignedDays++;
+            openProvider.currentShifts.push({ day: day, shiftType: 'open' });
+        }
+        
+        // Second, assign close shift (second priority)
+        const closeProvider = this.selectProviderForShift(workingProviders, dayData, 'close', false);
+        if (closeProvider) {
+            dayData.shifts.close.push(closeProvider.name);
+            closeProvider.assignedDays++;
+            closeProvider.currentShifts.push({ day: day, shiftType: 'close' });
+        }
+        
+        // Finally, assign mid shift (lowest priority)
+        const midProvider = this.selectProviderForShift(workingProviders, dayData, 'mid', false);
+        if (midProvider) {
+            dayData.shifts.mid.push(midProvider.name);
+            midProvider.assignedDays++;
+            midProvider.currentShifts.push({ day: day, shiftType: 'mid' });
         }
     }
 
