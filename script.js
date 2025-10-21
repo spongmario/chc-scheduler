@@ -442,31 +442,109 @@ class CHCScheduler {
     }
 
     distributeRegularShiftsWithFloats(schedule, locationProviders, allProviders, daysInMonth) {
-        // Use the original Saturday-first approach but with float provider support
+        // NEW APPROACH: Fill each location with dedicated providers first, then use floats
+        // This ensures each location's dedicated staff get their required days before floats are used
+        
+        // First pass: Fill each location with dedicated providers only
         for (const location in schedule) {
-            this.distributeShiftsWithRankingForLocationWithFloats(schedule[location], locationProviders[location], allProviders);
+            this.distributeShiftsWithRankingForLocation(schedule[location], locationProviders[location]);
+        }
+        
+        // Second pass: Use floats to fill remaining gaps
+        for (const location in schedule) {
+            this.fillRemainingShiftsWithFloats(schedule[location], locationProviders[location], allProviders);
         }
     }
 
-    distributeShiftsWithRankingForLocationWithFloats(schedule, locationProviders, allProviders) {
-        // Create working providers for this location
-        const workingProviders = locationProviders.map(p => ({
-            ...p,
-            assignedDays: 0,
-            assignedSaturdays: 0,
-            assignedHolidays: 0,
-            currentShifts: []
-        }));
-
-        // Add shared float providers to the working providers list (CRITICAL: Use shared tracking)
-        if (this.sharedFloatProviders) {
-            Object.values(this.sharedFloatProviders).forEach(floatProvider => {
-                workingProviders.push(floatProvider);
-            });
+    fillRemainingShiftsWithFloats(schedule, locationProviders, allProviders) {
+        // Fill any remaining empty shifts with float providers
+        // This only runs after dedicated providers have been assigned
+        
+        for (const day in schedule) {
+            const dayData = schedule[day];
+            if (dayData.isHoliday) continue; // Skip holidays
+            
+            const dayNum = parseInt(day);
+            const isSaturday = dayData.dayOfWeek === 6;
+            
+            // Check each shift type for empty slots
+            const shiftTypes = isSaturday ? ['open', 'close'] : ['open', 'mid', 'close'];
+            
+            for (const shiftType of shiftTypes) {
+                if (!dayData.shifts[shiftType] || dayData.shifts[shiftType].length === 0) {
+                    // This shift is empty, try to fill it with a float provider
+                    const floatProvider = this.selectFloatProviderForShift(dayData, shiftType, isSaturday);
+                    if (floatProvider) {
+                        this.assignProviderToShiftWithFloatTracking(floatProvider, dayData, shiftType, dayNum);
+                    }
+                }
+            }
         }
+    }
 
-        // Use the original Saturday-first logic
-        this.distributeShiftsWithRankingForLocation(schedule, workingProviders);
+    selectFloatProviderForShift(dayData, shiftType, isSaturday) {
+        // Select a float provider for this shift, considering their workload and preferences
+        const availableFloats = Object.values(this.sharedFloatProviders || {}).filter(p => {
+            // Check if already assigned today
+            const assignedToday = p.currentShifts.some(s => s.day === dayData.date.getDate());
+            if (assignedToday) return false;
+
+            // Check PTO
+            const isOnPTO = p.ptoDates.some(ptoDate => {
+                const ptoDateNormalized = new Date(ptoDate.getFullYear(), ptoDate.getMonth(), ptoDate.getDate());
+                const scheduleDateNormalized = new Date(dayData.date.getFullYear(), dayData.date.getMonth(), dayData.date.getDate());
+                return ptoDateNormalized.getTime() === scheduleDateNormalized.getTime();
+            });
+            if (isOnPTO) return false;
+
+            // Check days per week limit
+            const daysWorkedThisWeek = this.getDaysWorkedThisWeek(p, dayData.date);
+            if (daysWorkedThisWeek >= p.daysPerWeek) return false;
+
+            // Check Saturday limits
+            if (isSaturday && p.assignedSaturdays >= p.saturdaysPerMonth) return false;
+
+            return true;
+        });
+
+        if (availableFloats.length === 0) return null;
+
+        // Score and select best float provider
+        const scoredFloats = availableFloats.map(p => {
+            let score = 0;
+
+            // Prioritize floats who need more days
+            const daysWorkedThisWeek = this.getDaysWorkedThisWeek(p, dayData.date);
+            const daysNeededThisWeek = p.daysPerWeek;
+            const daysRemainingThisWeek = daysNeededThisWeek - daysWorkedThisWeek;
+            
+            if (daysRemainingThisWeek > 0) {
+                score += daysRemainingThisWeek * 1000; // High priority for floats who need days
+            }
+
+            // Prefer shift preference match
+            const shiftPreferenceIndex = p.shiftPreferences.indexOf(shiftType);
+            if (shiftPreferenceIndex !== -1) {
+                if (shiftPreferenceIndex === 0) {
+                    score += 200; // 1st preference
+                } else if (shiftPreferenceIndex === 1) {
+                    score += 100; // 2nd preference
+                } else {
+                    score += 50; // 3rd preference
+                }
+            }
+
+            // Prefer floats who haven't worked as much overall
+            score += Math.max(0, (20 - p.assignedDays) * 2);
+
+            // Random factor
+            score += Math.random() * 10;
+
+            return { provider: p, score };
+        });
+
+        scoredFloats.sort((a, b) => b.score - a.score);
+        return scoredFloats[0].provider;
     }
 
     // Helper method to assign a provider to a shift and update shared float provider tracking
@@ -511,8 +589,7 @@ class CHCScheduler {
             });
             if (isOnPTO) return false;
 
-            // Check preferred days off
-            if (p.preferredDaysOff.includes(dayData.dayOfWeek)) return false;
+            // Preferred days off are now soft constraints - don't filter out, just penalize in scoring
 
             // Check days per week limit
             const daysWorkedThisWeek = this.getDaysWorkedThisWeek(p, dayData.date);
@@ -532,16 +609,23 @@ class CHCScheduler {
             const daysNeededThisWeek = provider.daysPerWeek;
             const daysRemainingThisWeek = daysNeededThisWeek - daysWorkedThisWeek;
             
-            // Prefer providers who need more days to reach their weekly target (but don't override preferences)
+            // CRITICAL: Prioritize providers who need more days to reach their weekly target
+            // This is the most important factor - providers MUST get their required days per week
             if (daysRemainingThisWeek > 0) {
-                score += daysRemainingThisWeek * 10; // Moderate priority for providers who need days
+                score += daysRemainingThisWeek * 1000; // Very high priority for providers who need days
             } else {
                 // If they've reached their weekly limit, they shouldn't be available anyway
                 score += -100; // Penalty for providers at their limit
             }
 
             // Prefer providers who haven't worked as much overall (secondary factor)
-            score += (10 - provider.assignedDays) * 5;
+            // Use a more robust scoring that doesn't go negative for high assigned days
+            score += Math.max(0, (20 - provider.assignedDays) * 2);
+
+            // Penalize working on preferred days off (soft constraint)
+            if (provider.preferredDaysOff.includes(dayData.dayOfWeek)) {
+                score -= 50; // Penalty for working on preferred day off
+            }
 
             // Prefer shift preference match (check in order of preference)
             const shiftPreferenceIndex = provider.shiftPreferences.indexOf(shiftType);
@@ -590,8 +674,7 @@ class CHCScheduler {
             const daysWorkedThisWeek = this.getDaysWorkedThisWeek(p, dayData.date);
             const saturdayLimitExceeded = p.assignedSaturdays >= p.saturdaysPerMonth;
             
-            return !assignedToday && !isOnPTO && !isPreferredDayOff && 
-                   daysWorkedThisWeek < p.daysPerWeek && !saturdayLimitExceeded &&
+            return !assignedToday && !isOnPTO &&                    daysWorkedThisWeek < p.daysPerWeek && !saturdayLimitExceeded &&
                    p.saturdaysPerMonth >= 2; // Only providers who WANT Saturdays
         });
         
@@ -647,14 +730,14 @@ class CHCScheduler {
                 const daysWorkedThisWeek = this.getDaysWorkedThisWeek(p, dayData.date);
                 const saturdayLimitExceeded = p.assignedSaturdays >= p.saturdaysPerMonth;
                 
-                return !assignedToday && !isOnPTO && !isPreferredDayOff && 
-                       daysWorkedThisWeek < p.daysPerWeek && !saturdayLimitExceeded;
+                return !assignedToday && !isOnPTO &&                        daysWorkedThisWeek < p.daysPerWeek && !saturdayLimitExceeded;
             });
             
             if (availableProviders.length > 0) {
                 const scoredProviders = availableProviders.map(p => {
                     let score = 0;
-                    score += (10 - p.assignedDays) * 10;
+                    // Use a more robust scoring that doesn't go negative for high assigned days
+                    score += Math.max(0, (20 - p.assignedDays) * 5);
                     
                     const prefIndex = p.shiftPreferences.indexOf(shiftType);
                     if (prefIndex !== -1) {
@@ -938,8 +1021,7 @@ class CHCScheduler {
             const daysWorkedThisWeek = this.getDaysWorkedThisWeek(p, dayData.date);
             const saturdayLimitExceeded = p.assignedSaturdays >= p.saturdaysPerMonth;
             
-            return !assignedToday && !isOnPTO && !isPreferredDayOff && 
-                   daysWorkedThisWeek < p.daysPerWeek && !saturdayLimitExceeded &&
+            return !assignedToday && !isOnPTO &&                    daysWorkedThisWeek < p.daysPerWeek && !saturdayLimitExceeded &&
                    p.saturdaysPerMonth >= 2; // Only providers who WANT Saturdays
         });
         
@@ -1034,7 +1116,7 @@ class CHCScheduler {
             });
             const isPreferredDayOff = p.preferredDaysOff.includes(dayData.dayOfWeek);
             
-            return !assignedToday && !isOnPTO && !isPreferredDayOff && daysWorkedThisWeek < p.daysPerWeek;
+            return !assignedToday && !isOnPTO &&  daysWorkedThisWeek < p.daysPerWeek;
         });
         
         // Be more conservative - only assign 2 providers if we have limited availability
@@ -1078,7 +1160,7 @@ class CHCScheduler {
 
     getDaysWorkedThisWeek(provider, currentDate) {
         // Calculate how many days this provider has worked in the current week
-        // This includes ALL shifts (weekdays AND Saturdays) - days per week is total shifts per week
+        // This includes ALL shifts (weekdays AND Saturdays) AND PTO days - days per week is total days per week
         // Week starts on Sunday (day 0) and ends on Saturday (day 6)
         
         const currentDayOfWeek = currentDate.getDay();
@@ -1088,7 +1170,7 @@ class CHCScheduler {
         const startOfWeek = new Date(currentDate);
         startOfWeek.setDate(currentDay - currentDayOfWeek);
         
-        // Count days worked in the current week (including Saturdays)
+        // Count days worked in the current week (including Saturdays and PTO days)
         let daysWorkedThisWeek = 0;
         
         for (let i = 0; i < 7; i++) {
@@ -1100,6 +1182,16 @@ class CHCScheduler {
             const workedThisDay = provider.currentShifts.some(shift => shift.day === weekDayNum);
             if (workedThisDay) {
                 daysWorkedThisWeek++;
+            } else {
+                // Check if provider has PTO on this day
+                const isOnPTO = provider.ptoDates.some(ptoDate => {
+                    const ptoDateNormalized = new Date(ptoDate.getFullYear(), ptoDate.getMonth(), ptoDate.getDate());
+                    const weekDayNormalized = new Date(weekDay.getFullYear(), weekDay.getMonth(), weekDay.getDate());
+                    return ptoDateNormalized.getTime() === weekDayNormalized.getTime();
+                });
+                if (isOnPTO) {
+                    daysWorkedThisWeek++;
+                }
             }
         }
         
@@ -1180,7 +1272,8 @@ class CHCScheduler {
             let score = 0;
 
             // Prefer providers who haven't worked as much overall
-            score += (10 - p.assignedDays) * 5;
+            // Use a more robust scoring that doesn't go negative for high assigned days
+            score += Math.max(0, (20 - p.assignedDays) * 2);
 
             // Prefer shift preference match
             const shiftPreferenceIndex = p.shiftPreferences.indexOf(shiftType);
@@ -1253,8 +1346,7 @@ class CHCScheduler {
             });
             if (isOnPTO) return false;
 
-            // Check if it's a preferred day off (any of their preferences)
-            if (p.preferredDaysOff.includes(dayData.dayOfWeek)) return false;
+            // Preferred days off are now soft constraints - don't filter out, just penalize in scoring
 
             // Check days per week limit
             const daysWorkedThisWeek = this.getDaysWorkedThisWeek(p, dayData.date);
@@ -1278,16 +1370,18 @@ class CHCScheduler {
             const daysNeededThisWeek = p.daysPerWeek;
             const daysRemainingThisWeek = daysNeededThisWeek - daysWorkedThisWeek;
             
-            // Prefer providers who need more days to reach their weekly target (but don't override preferences)
+            // CRITICAL: Prioritize providers who need more days to reach their weekly target
+            // This is the most important factor - providers MUST get their required days per week
             if (daysRemainingThisWeek > 0) {
-                score += daysRemainingThisWeek * 10; // Moderate priority for providers who need days
+                score += daysRemainingThisWeek * 1000; // Very high priority for providers who need days
             } else {
                 // If they've reached their weekly limit, they shouldn't be available anyway
                 score += -100; // Penalty for providers at their limit
             }
 
             // Prefer providers who haven't worked as much overall (secondary factor)
-            score += (10 - p.assignedDays) * 5;
+            // Use a more robust scoring that doesn't go negative for high assigned days
+            score += Math.max(0, (20 - p.assignedDays) * 2);
 
             // Prefer shift preference match (check in order of preference)
             const shiftPreferenceIndex = p.shiftPreferences.indexOf(shiftType);
@@ -1841,64 +1935,298 @@ class CHCScheduler {
         const month = parseInt(this.selectedMonth.split('-')[1]) - 1;
         const monthName = new Date(year, month).toLocaleString('default', { month: 'long' });
 
-        // Create workbook with multiple sheets for each location
+        // Create workbook with calendar-style layout
         const wb = XLSX.utils.book_new();
+        const exportData = [];
 
-        for (const location in this.schedule) {
-            // Create export data for this location
-            const exportData = [];
-            exportData.push(['Date', 'Day', 'Open', 'Mid', 'Close', 'PTO Today']);
-
-            for (const day in this.schedule[location]) {
-                const dayData = this.schedule[location][day];
-                const dayNum = parseInt(day);
-                const date = new Date(year, month, dayNum);
-                const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-                
-                // Get PTO for this day for this location
-                const ptoToday = this.providers.filter(provider => 
-                    provider.location === location && provider.ptoDates.some(ptoDate => {
-                        const ptoDateNormalized = new Date(ptoDate.getFullYear(), ptoDate.getMonth(), ptoDate.getDate());
-                        const scheduleDateNormalized = new Date(year, month, dayNum);
-                        return ptoDateNormalized.getTime() === scheduleDateNormalized.getTime();
-                    })
-                ).map(provider => provider.name).join(', ');
-                
-                const isSaturday = dayData.dayOfWeek === 6;
-                const isThursday = dayData.dayOfWeek === 4;
-                
-                let openShift, midShift, closeShift;
-                
-                if (dayData.isHoliday) {
-                    // Holiday: show holiday name in all three shift columns
-                    openShift = dayData.holidayName;
-                    midShift = dayData.holidayName;
-                    closeShift = dayData.holidayName;
-                } else {
-                    // Regular day: show actual shifts
-                    openShift = (isSaturday || isThursday) ? '-' : (dayData.shifts.open || []).join(', ');
-                    midShift = (dayData.shifts.mid || []).join(', ');
-                    closeShift = (isSaturday || isThursday) ? '-' : (dayData.shifts.close || []).join(', ');
-                }
-                
-                const row = [
-                    `${monthName} ${dayNum}`,
-                    dayNames[dayData.dayOfWeek],
-                    openShift,
-                    midShift,
-                    closeShift,
-                    ptoToday || '-'
-                ];
-                exportData.push(row);
-            }
-
-            // Create worksheet for this location
-            const ws = XLSX.utils.aoa_to_sheet(exportData);
-            XLSX.utils.book_append_sheet(wb, ws, `${location} Schedule`);
+        // Get all days in the month
+        const daysInMonth = new Date(year, month + 1, 0).getDate();
+        const allDays = [];
+        for (let day = 1; day <= daysInMonth; day++) {
+            const date = new Date(year, month, day);
+            allDays.push({ day, date, dayOfWeek: date.getDay() });
         }
 
-        // Download the workbook
+        // Group days by week (Monday-Saturday)
+        const weeks = [];
+        let currentWeek = [];
+        
+        for (const dayInfo of allDays) {
+            // Start a new week on Monday (dayOfWeek = 1)
+            if (dayInfo.dayOfWeek === 1 && currentWeek.length > 0) {
+                weeks.push([...currentWeek]);
+                currentWeek = [];
+            }
+            currentWeek.push(dayInfo);
+        }
+        if (currentWeek.length > 0) {
+            weeks.push(currentWeek);
+        }
+
+        // Process each week
+        for (let weekIndex = 0; weekIndex < weeks.length; weekIndex++) {
+            const week = weeks[weekIndex];
+            
+            // Add header row with days of the week (Monday through Saturday only)
+            exportData.push(['', 'MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY']);
+            
+            // Add empty row for spacing
+            exportData.push(['', '', '', '', '', '', '']);
+
+            // Add date row with formatted dates for this week
+            const dateRow = [''];
+            for (let dayOfWeek = 1; dayOfWeek <= 6; dayOfWeek++) {
+                const dayInfo = week.find(d => d.dayOfWeek === dayOfWeek);
+                if (dayInfo) {
+                    // Format as "DD-MMM" (e.g., "27-Oct")
+                    const day = dayInfo.date.getDate();
+                    const monthAbbr = dayInfo.date.toLocaleString('default', { month: 'short' });
+                    dateRow.push(`${day}-${monthAbbr}`);
+                } else {
+                    dateRow.push('');
+                }
+            }
+            exportData.push(dateRow);
+
+            // Add Edmonds WIC header
+            exportData.push(['Edmonds WIC', '', '', '', '', '', '']);
+
+            // Get all providers and create rows for each
+            const allProviders = this.providers;
+            
+            // Create a row for each provider
+            for (const provider of allProviders) {
+                const providerRow = [''];
+                
+                // Fill in shifts for each day of the week (Monday through Saturday)
+                for (let dayOfWeek = 1; dayOfWeek <= 6; dayOfWeek++) {
+                    let shiftText = '';
+                    
+                    // Find the day in this week
+                    const dayInfo = week.find(d => d.dayOfWeek === dayOfWeek);
+                    if (dayInfo) {
+                        const dayNum = dayInfo.day;
+                        
+                        // Find the day in the schedule
+                        for (const location in this.schedule) {
+                            if (this.schedule[location][dayNum]) {
+                                const dayData = this.schedule[location][dayNum];
+                                
+                                // Check if this is a holiday
+                                if (dayData.isHoliday) {
+                                    shiftText = dayData.holidayName;
+                                } else {
+                                    // Check if provider is on PTO
+                                    const isOnPTO = provider.ptoDates.some(ptoDate => {
+                                        const ptoDateNormalized = new Date(ptoDate.getFullYear(), ptoDate.getMonth(), ptoDate.getDate());
+                                        const scheduleDateNormalized = new Date(year, month, dayNum);
+                                        return ptoDateNormalized.getTime() === scheduleDateNormalized.getTime();
+                                    });
+                                    
+                                    if (isOnPTO) {
+                                        shiftText = `${provider.name} PTO`;
+                                    } else {
+                                        // Check which shift the provider is assigned to
+                                        const shifts = dayData.shifts;
+                                        let assignedShifts = [];
+                                        
+                                        if (shifts.open && shifts.open.includes(provider.name)) {
+                                            assignedShifts.push('8:00-6:00');
+                                        }
+                                        if (shifts.mid && shifts.mid.includes(provider.name)) {
+                                            assignedShifts.push('9:00-7:00');
+                                        }
+                                        if (shifts.close && shifts.close.includes(provider.name)) {
+                                            assignedShifts.push('10:00-8:00');
+                                        }
+                                        
+                                        if (assignedShifts.length > 0) {
+                                            shiftText = `${provider.name} ${assignedShifts.join(', ')}`;
+                                        } else {
+                                            shiftText = `${provider.name} OFF`;
+                                        }
+                                    }
+                                }
+                                break;
+                            }
+                        }
+                    }
+                    
+                    providerRow.push(shiftText);
+                }
+                
+                exportData.push(providerRow);
+            }
+
+            // Add EVC WIC header
+            exportData.push(['EVC WIC', '', '', '', '', '', '']);
+
+            // Add empty row between weeks (except for the last week)
+            if (weekIndex < weeks.length - 1) {
+                exportData.push(['', '', '', '', '', '', '']);
+            }
+        }
+
+        // Create worksheet
+        const ws = XLSX.utils.aoa_to_sheet(exportData);
+        
+        // Set column widths
+        const colWidths = [
+            { wch: 15 }, // Column A (empty)
+            { wch: 20 }, // Monday
+            { wch: 20 }, // Tuesday
+            { wch: 20 }, // Wednesday
+            { wch: 20 }, // Thursday
+            { wch: 20 }, // Friday
+            { wch: 20 }  // Saturday
+        ];
+        ws['!cols'] = colWidths;
+
+        // Try a different approach for color coding using conditional formatting
+        const range = XLSX.utils.decode_range(ws['!ref']);
+        
+        // Apply color coding to cells using a more direct approach
+        for (let row = range.s.r; row <= range.e.r; row++) {
+            for (let col = range.s.c; col <= range.e.c; col++) {
+                const cellAddress = XLSX.utils.encode_cell({ r: row, c: col });
+                if (!ws[cellAddress]) continue;
+                
+                const cellValue = ws[cellAddress].v;
+                if (typeof cellValue === 'string') {
+                    // Light blue for PTO
+                    if (cellValue.includes('PTO')) {
+                        ws[cellAddress].s = {
+                            fill: {
+                                fgColor: { rgb: 'ADD8E6' }
+                            }
+                        };
+                    }
+                    // Dark blue for Edmonds closing shifts (10:00-8:00)
+                    else if (cellValue.includes('10:00-8:00')) {
+                        // Determine location based on row position
+                        let isEdmondsLocation = false;
+                        for (let checkRow = row; checkRow >= 0; checkRow--) {
+                            const checkCell = XLSX.utils.encode_cell({ r: checkRow, c: 0 });
+                            if (ws[checkCell] && ws[checkCell].v === 'Edmonds WIC') {
+                                isEdmondsLocation = true;
+                                break;
+                            } else if (ws[checkCell] && ws[checkCell].v === 'EVC WIC') {
+                                isEdmondsLocation = false;
+                                break;
+                            }
+                        }
+                        
+                        if (isEdmondsLocation) {
+                            ws[cellAddress].s = {
+                                fill: {
+                                    fgColor: { rgb: '00008B' }
+                                },
+                                font: {
+                                    color: { rgb: 'FFFFFF' }
+                                }
+                            };
+                        } else {
+                            ws[cellAddress].s = {
+                                fill: {
+                                    fgColor: { rgb: '006400' }
+                                },
+                                font: {
+                                    color: { rgb: 'FFFFFF' }
+                                }
+                            };
+                        }
+                    }
+                    // Pink for holidays and float shifts
+                    else if (cellValue.includes('Holiday') || cellValue.includes('NEW YEAR') || 
+                             cellValue.includes('MEMORIAL') || cellValue.includes('INDEPENDENCE') ||
+                             cellValue.includes('LABOR') || cellValue.includes('THANKSGIVING') ||
+                             cellValue.includes('CHRISTMAS') || cellValue.includes('float')) {
+                        ws[cellAddress].s = {
+                            fill: {
+                                fgColor: { rgb: 'FFC0CB' }
+                            }
+                        };
+                    }
+                    // Yellow for comments/special shifts
+                    else if (cellValue.includes('CME') || cellValue.includes('TBD') || 
+                             cellValue.includes('Coverage') || cellValue.includes('EVC') || 
+                             cellValue.includes('EDM')) {
+                        ws[cellAddress].s = {
+                            fill: {
+                                fgColor: { rgb: 'FFFF00' }
+                            }
+                        };
+                    }
+                }
+            }
+        }
+
+        XLSX.utils.book_append_sheet(wb, ws, `${monthName} ${year} Schedule`);
+
+        // Since XLSX library has limited styling support, let's try a different approach
+        // Create a CSV file with color information that can be imported into Excel
+        let csvContent = '';
+        
+        // Add BOM for UTF-8 encoding
+        csvContent += '\uFEFF';
+        
+        // Convert data to CSV format
+        for (let i = 0; i < exportData.length; i++) {
+            const row = exportData[i];
+            const csvRow = row.map(cell => {
+                if (typeof cell === 'string' && cell.includes(',')) {
+                    return `"${cell}"`;
+                }
+                return cell;
+            }).join(',');
+            csvContent += csvRow + '\n';
+        }
+        
+        // Create a text file with color instructions
+        const colorInstructions = `
+COLOR CODING INSTRUCTIONS FOR EXCEL:
+=====================================
+
+1. PTO entries (containing "PTO"): Light Blue background (#ADD8E6)
+2. Closing shifts at Edmonds (containing "10:00-8:00" in Edmonds WIC section): Dark Blue background (#00008B) with white text
+3. Closing shifts at Central (containing "10:00-8:00" in EVC WIC section): Dark Green background (#006400) with white text
+4. Holidays (containing "Holiday", "NEW YEAR", "MEMORIAL", etc.): Pink background (#FFC0CB)
+5. Special shifts (containing "CME", "TBD", "Coverage", "EVC", "EDM"): Yellow background (#FFFF00)
+
+To apply colors in Excel:
+1. Select the data range
+2. Go to Home > Conditional Formatting > New Rule
+3. Use "Format only cells that contain" and set the conditions above
+4. Apply the appropriate background colors
+
+Alternatively, you can manually apply colors to cells based on their content.
+        `;
+        
+        // Download both files
+        const csvBlob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const csvUrl = URL.createObjectURL(csvBlob);
+        const csvLink = document.createElement('a');
+        csvLink.href = csvUrl;
+        csvLink.download = `CHC_Schedule_${monthName}_${year}.csv`;
+        csvLink.click();
+        URL.revokeObjectURL(csvUrl);
+        
+        // Also download the Excel file without colors for now
         XLSX.writeFile(wb, `CHC_Schedule_${monthName}_${year}.xlsx`);
+        
+        // Show color instructions to user
+        alert(`Schedule exported! 
+
+The CSV file contains the data that you can import into Excel and apply colors manually.
+
+Color coding instructions:
+• PTO entries: Light Blue (#ADD8E6)
+• Edmonds closing shifts (10:00-8:00): Dark Blue (#00008B) with white text
+• Central closing shifts (10:00-8:00): Dark Green (#006400) with white text
+• Holidays: Pink (#FFC0CB)
+• Special shifts: Yellow (#FFFF00)
+
+Use Excel's Conditional Formatting to apply these colors automatically.`);
     }
 
     showLoading() {
@@ -2007,10 +2335,107 @@ class CHCScheduler {
             analysis.overworkedProviders += locationAnalysis.overworkedProviders;
             analysis.preferenceViolations += locationAnalysis.preferenceViolations;
             analysis.issues.push(...locationAnalysis.issues);
-            analysis.providerWorkload.push(...locationAnalysis.providerWorkload);
+            // Don't add provider workload here - we'll handle it separately to avoid duplicates
         }
         
+        // Analyze provider workload across all locations (handles float providers correctly)
+        analysis.providerWorkload = this.analyzeProviderWorkloadAcrossAllLocations();
+        
         return analysis;
+    }
+
+    analyzeProviderWorkloadAcrossAllLocations() {
+        const year = parseInt(this.selectedMonth.split('-')[0]);
+        const month = parseInt(this.selectedMonth.split('-')[1]) - 1;
+        
+        // Get all providers (including floats)
+        const allProviders = [...this.providers];
+        
+        // Track provider assignments across ALL locations
+        const providerStats = {};
+        allProviders.forEach(provider => {
+            providerStats[provider.name] = {
+                assignedDays: 0,
+                assignedSaturdays: 0,
+                assignedHolidays: 0,
+                preferenceViolations: 0,
+                overworked: false
+            };
+        });
+        
+        // Analyze each location and combine stats for float providers
+        for (const location in this.schedule) {
+            for (const day in this.schedule[location]) {
+                const dayData = this.schedule[location][day];
+                const dayNum = parseInt(day);
+                const date = new Date(year, month, dayNum);
+                
+                // Track provider assignments
+                ['open', 'mid', 'close'].forEach(shiftType => {
+                    const providers = dayData.shifts[shiftType] || [];
+                    providers.forEach(providerName => {
+                        if (providerStats[providerName]) {
+                            providerStats[providerName].assignedDays++;
+                            if (dayData.dayOfWeek === 6) {
+                                providerStats[providerName].assignedSaturdays++;
+                            }
+                            
+                            // Check for preference violations
+                            const provider = allProviders.find(p => p.name === providerName);
+                            if (provider) {
+                                // Check if working on preferred day off
+                                if (provider.preferredDaysOff.includes(dayData.dayOfWeek)) {
+                                    providerStats[providerName].preferenceViolations++;
+                                }
+                                
+                                // Check if working shift they don't prefer
+                                if (provider.shiftPreferences.length > 0 && 
+                                    !provider.shiftPreferences.includes(shiftType)) {
+                                    providerStats[providerName].preferenceViolations++;
+                                }
+                            }
+                        }
+                    });
+                });
+                
+                // Also count holidays for all providers at this location
+                if (dayData.isHoliday) {
+                    allProviders.forEach(provider => {
+                        if (providerStats[provider.name]) {
+                            providerStats[provider.name].assignedDays++;
+                            providerStats[provider.name].assignedHolidays++;
+                        }
+                    });
+                }
+            }
+        }
+        
+        // Calculate workload analysis for each provider
+        const providerWorkload = [];
+        allProviders.forEach(provider => {
+            const stats = providerStats[provider.name];
+            // Calculate target days: days per week * 4 weeks (holidays don't increase target, they just count as assigned days)
+            const targetDays = provider.daysPerWeek * 4;
+            const saturdayTarget = provider.saturdaysPerMonth;
+            
+            let status = 'balanced';
+            if (stats.assignedDays > targetDays + 2) {
+                status = 'overworked';
+            } else if (stats.assignedDays < targetDays - 2) {
+                status = 'underworked';
+            }
+            
+            providerWorkload.push({
+                name: provider.name,
+                assignedDays: stats.assignedDays,
+                targetDays: targetDays,
+                saturdayCoverage: `${stats.assignedSaturdays}/${saturdayTarget}`,
+                status: status,
+                preferenceViolations: stats.preferenceViolations
+            });
+        });
+        
+        return providerWorkload;
     }
 
     analyzeLocationSchedule(location) {
@@ -2096,12 +2521,23 @@ class CHCScheduler {
                     }
                 });
             });
+            
+            // Also count holidays for all providers at this location
+            if (dayData.isHoliday) {
+                allLocationProviders.forEach(provider => {
+                    if (providerStats[provider.name]) {
+                        providerStats[provider.name].assignedDays++;
+                        providerStats[provider.name].assignedHolidays++;
+                    }
+                });
+            }
         }
         
         // Analyze provider workload
         allLocationProviders.forEach(provider => {
             const stats = providerStats[provider.name];
-            const targetDays = provider.daysPerWeek * 4; // Approximate monthly target
+            // Calculate target days: days per week * 4 weeks (holidays don't increase target, they just count as assigned days)
+            const targetDays = provider.daysPerWeek * 4;
             const saturdayTarget = provider.saturdaysPerMonth;
             
             let status = 'balanced';
